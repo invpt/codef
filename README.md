@@ -22,7 +22,7 @@ to specialize them with a specific set of the function's arguments specified. Th
 specialization could happen at both runtime and compile-time. When a function is specialized, it
 would be recompiled but taking into account the fact that the arguments have been made constant
 (and what constant values they have been given).
-Said in n a few words, this is "partial function application as JIT compilation"
+Said in a few words, this is "partial function application as JIT compilation."
 
 In the limit, this feature could make it very easy to make a performant implementation of another
 language: just write an interpreter for it and then specialize the function with the code specified
