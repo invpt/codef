@@ -205,6 +205,10 @@ impl<'s, R: CharReader> Tokens<'s, R> {
                         self.chars.next()?;
                         self.skip_line()?;
                         continue;
+                    } else if let Some((_, '*')) = self.chars.peek()? {
+                        self.chars.next()?;
+                        self.block_comment()?;
+                        continue;
                     } else {
                         Ok(Some(Token {
                             kind: TokenKind::Slash,
@@ -247,6 +251,27 @@ impl<'s, R: CharReader> Tokens<'s, R> {
     fn skip_line(&mut self) -> Result<()> {
         while let Some((_, ch)) = self.chars.next()? {
             if ch == '\n' {
+                break;
+            }
+        }
+
+        Ok(())
+    }
+
+    fn block_comment(&mut self) -> Result<()> {
+        let mut i = 1;
+        while let Some((_, ch)) = self.chars.next()? {
+            if ch == '*' {
+                if let Some((_, '/')) = self.chars.next()? {
+                    i -= 1;
+                }
+            } else if ch == '/' {
+                if let Some((_, '*')) = self.chars.next()? {
+                    i += 1;
+                }
+            }
+
+            if i == 0 {
                 break;
             }
         }
