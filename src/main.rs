@@ -1,4 +1,4 @@
-use crate::parser::ast_size;
+use crate::parser::utils::ast_size;
 
 mod parser;
 mod tokenizer;

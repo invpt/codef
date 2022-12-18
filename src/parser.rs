@@ -4,154 +4,12 @@ use crate::{
     tokenizer::{Intern, Span, Token, TokenKind, TokenizationError, Tokens},
 };
 
-pub fn ast_size(expr: &Expr) -> usize {
-    std::mem::size_of::<Expr>()
-        + match &expr.kind {
-            ExprKind::Object { definitions } => definitions.iter().map(def_size).sum(),
-            ExprKind::Scope {
-                body,
-                ..
-            } => {
-                body.iter().map(|it| match it {
-                    Item::Expr(e) => ast_size(e) + 8,
-                    Item::Def(d) => def_size(d) + 8,
-                    Item::Empty => 8,
-                }).sum()
-                //0//defs.iter().map(def_size).sum::<usize>() + body.iter().map(ast_size).sum::<usize>()
-            }
-            ExprKind::Lambda { arg, body } => ast_size(arg) + ast_size(body),
-            ExprKind::SqLambda { arg, expr } => ast_size(expr) + ast_size(arg),
-            ExprKind::BinOp { lhs, rhs, .. } => ast_size(lhs) + ast_size(rhs),
-            ExprKind::UnOp { arg, .. } => ast_size(arg),
-            ExprKind::Access { expr, prop } => ast_size(expr) + prop.0.len(),
-            ExprKind::Case { cond, on_true, on_false } => ast_size(cond) + ast_size(on_true) + ast_size(on_false),
-            ExprKind::Tuple { exprs } => exprs.iter().map(ast_size).sum(),
-            ExprKind::Apply { a, b } => ast_size(a) + ast_size(b),
-            ExprKind::TypeAssertion { a, b } => ast_size(a) + ast_size(b),
-            ExprKind::Variant(its) => its.iter().map(varit_size).sum(),
-            ExprKind::Ident(i) => i.0.len(),
-            ExprKind::Literal(Literal::String(i)) => i.0.len(),
-            _ => 0,
-        }
-}
+mod ast;
+mod preds;
+pub mod utils;
 
-fn def_size(def: &Def) -> usize {
-    std::mem::size_of::<Def>() + def.name.0.len() + ast_size(&def.value)
-}
-
-fn varit_size(varit: &VariantItem) -> usize {
-    std::mem::size_of::<VariantItem>() + varit.value.as_ref().map(ast_size).unwrap_or(0)
-}
-
-#[derive(Debug)]
-pub struct Expr<'s> {
-    pub kind: ExprKind<'s>,
-    pub span: Span,
-}
-
-#[derive(Debug)]
-pub enum ExprKind<'s> {
-    Object {
-        definitions: Box<[Def<'s>]>,
-    },
-    Scope {
-        body: Box<[Item<'s>]>,
-    },
-    Lambda {
-        arg: Box<Expr<'s>>,
-        body: Box<Expr<'s>>,
-    },
-    SqLambda {
-        arg: Box<Expr<'s>>,
-        expr: Box<Expr<'s>>,
-    },
-    BinOp {
-        op: BinOp,
-        lhs: Box<Expr<'s>>,
-        rhs: Box<Expr<'s>>,
-    },
-    UnOp {
-        op: UnOp,
-        arg: Box<Expr<'s>>,
-    },
-    Access {
-        expr: Box<Expr<'s>>,
-        prop: Intern<'s>,
-    },
-    Case {
-        cond: Box<Expr<'s>>,
-        on_true: Box<Expr<'s>>,
-        on_false: Box<Expr<'s>>,
-    },
-    Tuple {
-        exprs: Box<[Expr<'s>]>,
-    },
-    Apply {
-        a: Box<Expr<'s>>,
-        b: Box<Expr<'s>>,
-    },
-    TypeAssertion {
-        a: Box<Expr<'s>>,
-        b: Box<Expr<'s>>,
-    },
-    Variant(Box<[VariantItem<'s>]>),
-    Ident(Intern<'s>),
-    Literal(Literal<'s>),
-}
-
-#[derive(Debug)]
-pub enum Item<'s> {
-    Def(Def<'s>),
-    Expr(Expr<'s>),
-    Empty,
-}
-
-#[derive(Debug)]
-pub struct VariantItem<'s> {
-    pub name: Intern<'s>,
-    pub value: Option<Expr<'s>>,
-    pub span: Span,
-}
-
-#[derive(Debug)]
-pub struct Def<'s> {
-    pub name: Intern<'s>,
-    pub value: Box<Expr<'s>>,
-    pub span: Span,
-}
-
-#[derive(Debug)]
-pub enum Literal<'s> {
-    Float(f64),
-    Integer(u64),
-    String(Intern<'s>),
-}
-
-#[derive(Debug)]
-pub enum BinOp {
-    Equal,
-    NotEqual,
-    Gt,
-    GtEq,
-    Lt,
-    LtEq,
-    Add,
-    Sub,
-    Mul,
-    Div,
-    Mod,
-    And,
-    Or,
-}
-
-#[derive(Debug)]
-pub enum UnOp {
-    Not,
-    Set,
-    Val,
-    Ref,
-    Deref,
-}
+pub use ast::*;
+use preds::*;
 
 #[derive(Debug)]
 pub struct ParseError<'s> {
@@ -181,62 +39,6 @@ pub fn parse<'s>(
     errors: &'s ErrorStream<'s>,
 ) -> Result<'s, Expr<'s>> {
     Parser { tokens, errors }.parse()
-}
-
-fn pred_or<'s, T>(
-    a: impl Fn(&Token<'s>) -> Option<T>,
-    b: impl Fn(&Token<'s>) -> Option<T>,
-) -> impl Fn(&Token<'s>) -> Option<T> {
-    move |t| a(t).or_else(|| b(t))
-}
-
-macro_rules! to_bpred {
-    ($f:expr) => {
-        |t| match $f(t) {
-            Some(_) => Some(()),
-            None => None,
-        }
-    };
-}
-
-macro_rules! pred_or {
-    ($a:expr, $b:expr) => {
-        |t| $a(t).or_else(|| $b(t))
-    };
-}
-
-fn to_bpred<'s, T>(pred: impl Fn(&Token<'s>) -> Option<T>) -> impl Fn(&Token<'s>) -> Option<()> {
-    move |t| match pred(t) {
-        Some(_) => Some(()),
-        None => None,
-    }
-}
-
-macro_rules! bpred {
-    ($($($pattern:pat_param)|+ $(if $guard:expr)?),* $(,)?) => {
-        |t: &Token<'s>| match t.kind {
-            $($($pattern)|+ $(if $guard)? => Some(()),)*
-            _ => None,
-        }
-    };
-}
-
-macro_rules! tpred {
-    ($($($pattern:pat_param)|+ $(if $guard:expr)?),* $(,)?) => {
-        |t| match t.kind {
-            $($($pattern)|+ $(if $guard)? => Some(t.clone()),)*
-            _ => None,
-        }
-    };
-}
-
-macro_rules! vpred {
-    ($($(:$t:ident:)? $($pattern:pat_param)|+ $(if $guard:expr)? => $val:expr),* $(,)?) => {
-        |t| match t.kind {
-            $($($pattern)|+ $(if $guard)? => {$(let $t = t;)? Some($val)})*
-            _ => None,
-        }
-    };
 }
 
 struct Parser<'s, R> {
@@ -385,7 +187,7 @@ impl<'s, R: CharReader> Parser<'s, R> {
 
         let mut semi = true;
         while let Some(None) = self.tokens.peek()?.map(&end_pred) {
-            if self.has_peek(to_bpred!(&end_pred))? {
+            if self.has_peek(to_bpred(&end_pred))? {
                 break;
             } else if self.has_peek(bpred!(TokenKind::Def))? {
                 body.push(Item::Def(self.def()?))
@@ -414,9 +216,7 @@ impl<'s, R: CharReader> Parser<'s, R> {
         };
 
         Ok(Expr {
-            kind: ExprKind::Scope {
-                body: body.into(),
-            },
+            kind: ExprKind::Scope { body: body.into() },
             span,
         })
     }
