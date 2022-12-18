@@ -9,7 +9,7 @@ pub struct Expr<'s> {
 #[derive(Debug)]
 pub enum ExprKind<'s> {
     Object {
-        definitions: Box<[Def<'s>]>,
+        defs: Box<[Def<'s>]>,
     },
     Scope {
         body: Box<[Item<'s>]>,
@@ -35,13 +35,13 @@ pub enum ExprKind<'s> {
         expr: Box<Expr<'s>>,
         prop: Intern<'s>,
     },
-    Case {
+    Branch {
         cond: Box<Expr<'s>>,
         on_true: Box<Expr<'s>>,
-        on_false: Box<Expr<'s>>,
+        on_false: Option<Box<Expr<'s>>>,
     },
     Tuple {
-        exprs: Box<[Expr<'s>]>,
+        items: Box<[Expr<'s>]>,
     },
     Apply {
         a: Box<Expr<'s>>,

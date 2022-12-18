@@ -3,7 +3,7 @@ use super::*;
 pub fn ast_size(expr: &Expr) -> usize {
     std::mem::size_of::<Expr>()
         + match &expr.kind {
-            ExprKind::Object { definitions } => definitions.iter().map(def_size).sum(),
+            ExprKind::Object { defs: definitions } => definitions.iter().map(def_size).sum(),
             ExprKind::Scope { body, .. } => {
                 body.iter()
                     .map(|it| match it {
@@ -19,12 +19,16 @@ pub fn ast_size(expr: &Expr) -> usize {
             ExprKind::BinOp { lhs, rhs, .. } => ast_size(lhs) + ast_size(rhs),
             ExprKind::UnOp { arg, .. } => ast_size(arg),
             ExprKind::Access { expr, prop } => ast_size(expr) + prop.0.len(),
-            ExprKind::Case {
+            ExprKind::Branch {
                 cond,
                 on_true,
                 on_false,
-            } => ast_size(cond) + ast_size(on_true) + ast_size(on_false),
-            ExprKind::Tuple { exprs } => exprs.iter().map(ast_size).sum(),
+            } => {
+                ast_size(cond)
+                    + ast_size(on_true)
+                    + on_false.as_ref().map_or(0, |on_false| ast_size(on_false))
+            }
+            ExprKind::Tuple { items: exprs } => exprs.iter().map(ast_size).sum(),
             ExprKind::Apply { a, b } => ast_size(a) + ast_size(b),
             ExprKind::TypeAssertion { a, b } => ast_size(a) + ast_size(b),
             ExprKind::Variant(its) => its.iter().map(varit_size).sum(),

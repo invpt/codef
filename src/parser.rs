@@ -1,7 +1,7 @@
 use crate::{
     char_reader::CharReader,
-    errors::{CompilationErrorKind, ErrorStream},
-    tokenizer::{Intern, Span, Token, TokenKind, TokenizationError, Tokens},
+    errors::ErrorStream,
+    tokenizer::{Span, Token, TokenKind, TokenizationError, Tokens},
 };
 
 mod ast;
@@ -57,14 +57,12 @@ impl<'s, R: CharReader> Parser<'s, R> {
             };
 
             Ok(Expr {
-                kind: ExprKind::Object { definitions },
+                kind: ExprKind::Object { defs: definitions },
                 span,
             })
         } else {
             Ok(Expr {
-                kind: ExprKind::Object {
-                    definitions: Box::new([]),
-                },
+                kind: ExprKind::Object { defs: Box::new([]) },
                 span: Span { start: 0, end: 0 },
             })
         }
@@ -89,8 +87,8 @@ impl<'s, R: CharReader> Parser<'s, R> {
             ..
         } = self.require(tpred!(TokenKind::Def))?;
         let name = self.require(vpred!(TokenKind::Name(n) => n))?;
-        let (value, needs_semi) = self.def_block()?;
-        let end = if needs_semi {
+        let (value, needs_semi) = self.block_needs_semi()?;
+        let end = if let NeedsSemi::Yes = needs_semi {
             self.require(vpred!(:t: TokenKind::Semicolon => t.span.end))?
         } else {
             value.span.end
@@ -103,11 +101,15 @@ impl<'s, R: CharReader> Parser<'s, R> {
         })
     }
 
-    fn def_block(&mut self) -> Result<'s, (Expr<'s>, bool)> {
+    fn block(&mut self) -> Result<'s, Expr<'s>> {
+        Ok(self.block_needs_semi()?.0)
+    }
+
+    fn block_needs_semi(&mut self) -> Result<'s, (Expr<'s>, NeedsSemi)> {
         if let Some(open) = self.eat(tpred!(TokenKind::OpenBrace))? {
             Ok((
                 self.scope(open.span.start, tpred!(TokenKind::CloseBrace))?,
-                false,
+                NeedsSemi::No,
             ))
         } else if let Some(open) = self.eat(tpred!(TokenKind::DotOpenBrace))? {
             let body_defs = self.object_body(bpred!(TokenKind::CloseBrace))?;
@@ -119,35 +121,12 @@ impl<'s, R: CharReader> Parser<'s, R> {
                         start: open.span.start,
                         end: close.span.end,
                     },
-                    kind: ExprKind::Object {
-                        definitions: body_defs,
-                    },
+                    kind: ExprKind::Object { defs: body_defs },
                 },
-                false,
+                NeedsSemi::No,
             ))
         } else {
-            Ok(self.def_expr()?)
-        }
-    }
-
-    fn block(&mut self) -> Result<'s, Expr<'s>> {
-        if let Some(open) = self.eat(tpred!(TokenKind::OpenBrace))? {
-            self.scope(open.span.start, tpred!(TokenKind::CloseBrace))
-        } else if let Some(open) = self.eat(tpred!(TokenKind::DotOpenBrace))? {
-            let body_defs = self.object_body(bpred!(TokenKind::CloseBrace))?;
-            let close = self.require(tpred!(TokenKind::CloseBrace))?;
-
-            Ok(Expr {
-                span: Span {
-                    start: open.span.start,
-                    end: close.span.end,
-                },
-                kind: ExprKind::Object {
-                    definitions: body_defs,
-                },
-            })
-        } else {
-            self.expr()
+            Ok(self.lambda_needs_semi()?)
         }
     }
 
@@ -164,7 +143,7 @@ impl<'s, R: CharReader> Parser<'s, R> {
 
             return Ok(Expr {
                 kind: ExprKind::Tuple {
-                    exprs: Box::new([]),
+                    items: Box::new([]),
                 },
                 span,
             });
@@ -222,10 +201,14 @@ impl<'s, R: CharReader> Parser<'s, R> {
     }
 
     fn tuple(&mut self) -> Result<'s, Expr<'s>> {
-        let first = self.block()?;
+        Ok(self.tuple_needs_semi()?.0)
+    }
+
+    fn tuple_needs_semi(&mut self) -> Result<'s, (Expr<'s>, NeedsSemi)> {
+        let first = self.block_needs_semi()?;
 
         if self.has_peek(bpred!(TokenKind::Comma))? {
-            let mut items = vec![first];
+            let mut items = vec![first.0];
 
             while self.eat(bpred!(TokenKind::Comma))?.is_some() {
                 let item = self.block()?;
@@ -238,19 +221,22 @@ impl<'s, R: CharReader> Parser<'s, R> {
                 end: items.last().unwrap().span.end,
             };
 
-            Ok(Expr {
-                kind: ExprKind::Tuple {
-                    exprs: items.into(),
+            Ok((
+                Expr {
+                    kind: ExprKind::Tuple {
+                        items: items.into(),
+                    },
+                    span,
                 },
-                span,
-            })
+                NeedsSemi::Yes,
+            ))
         } else {
             Ok(first)
         }
     }
 
-    fn def_expr(&mut self) -> Result<'s, (Expr<'s>, bool)> {
-        let mut a = (self.logical()?, true);
+    fn lambda_needs_semi(&mut self) -> Result<'s, (Expr<'s>, NeedsSemi)> {
+        let mut a = self.expr_needs_semi()?;
 
         if let Some(open) = self.eat(tpred!(TokenKind::OpenBrace))? {
             let body = self.scope(open.span.start, tpred!(TokenKind::CloseBrace))?;
@@ -266,7 +252,7 @@ impl<'s, R: CharReader> Parser<'s, R> {
                         body: Box::new(body),
                     },
                 },
-                false,
+                NeedsSemi::No,
             );
         } else if let Some(open) = self.eat(tpred!(TokenKind::DotOpenBrace))? {
             let body_defs = self.object_body(bpred!(TokenKind::CloseBrace))?;
@@ -277,9 +263,7 @@ impl<'s, R: CharReader> Parser<'s, R> {
                     start: open.span.start,
                     end: close.span.end,
                 },
-                kind: ExprKind::Object {
-                    definitions: body_defs,
-                },
+                kind: ExprKind::Object { defs: body_defs },
             });
 
             a = (
@@ -293,9 +277,23 @@ impl<'s, R: CharReader> Parser<'s, R> {
                         body,
                     },
                 },
-                false,
+                NeedsSemi::Yes,
             );
         }
+
+        Ok(a)
+    }
+
+    fn expr(&mut self) -> Result<'s, Expr<'s>> {
+        Ok(self.expr_needs_semi()?.0)
+    }
+
+    fn expr_needs_semi(&mut self) -> Result<'s, (Expr<'s>, NeedsSemi)> {
+        if self.has_peek(bpred!(TokenKind::Case))? {
+            return Ok((self.case()?, NeedsSemi::No));
+        }
+
+        let mut a = (self.logical()?, NeedsSemi::Yes);
 
         if self.eat(bpred!(TokenKind::ColonColon))?.is_some() {
             let b = self.logical()?;
@@ -311,71 +309,67 @@ impl<'s, R: CharReader> Parser<'s, R> {
                         b: Box::new(b),
                     },
                 },
-                true,
+                NeedsSemi::Yes,
             );
         }
 
         Ok(a)
     }
 
-    fn expr(&mut self) -> Result<'s, Expr<'s>> {
-        let mut a = self.logical()?;
+    fn case(&mut self) -> Result<'s, Expr<'s>> {
+        let case = self.require(tpred!(TokenKind::Case))?;
 
-        if let Some(open) = self.eat(tpred!(TokenKind::OpenBrace))? {
-            let body = self.scope(open.span.start, tpred!(TokenKind::CloseBrace))?;
+        self.case_inner(case.span.start)
+    }
 
-            a = Expr {
-                span: Span {
-                    start: a.span.start,
-                    end: body.span.end,
-                },
-                kind: ExprKind::Lambda {
-                    arg: Box::new(a),
-                    body: Box::new(body),
-                },
-            };
-        }
+    fn case_inner(&mut self, start: usize) -> Result<'s, Expr<'s>> {
+        let cond = self.expr()?;
+        let on_true_open = self.require(tpred!(TokenKind::OpenBrace))?;
+        let on_true = self.scope(on_true_open.span.start, tpred!(TokenKind::CloseBrace))?;
+        if let Some(r#else) = self.eat(tpred!(TokenKind::Else))? {
+            if let Some(on_false_open) = self.eat(tpred!(TokenKind::OpenBrace))? {
+                let on_false =
+                    self.scope(on_false_open.span.start, tpred!(TokenKind::CloseBrace))?;
 
-        if self.eat(bpred!(TokenKind::ColonColon))?.is_some() {
-            let b = self.logical()?;
+                Ok(Expr {
+                    span: Span {
+                        start,
+                        end: on_false.span.end,
+                    },
+                    kind: ExprKind::Branch {
+                        cond: Box::new(cond),
+                        on_true: Box::new(on_true),
+                        on_false: Some(Box::new(on_false)),
+                    },
+                })
+            } else {
+                let inner = self.case_inner(r#else.span.start)?;
 
-            a = Expr {
-                span: Span {
-                    start: a.span.start,
-                    end: b.span.end,
-                },
-                kind: ExprKind::TypeAssertion {
-                    a: Box::new(a),
-                    b: Box::new(b),
-                },
-            };
-        } else if let Some(open) = self.eat(tpred!(TokenKind::DotOpenBrace))? {
-            let body_defs = self.object_body(bpred!(TokenKind::CloseBrace))?;
-            let close = self.require(tpred!(TokenKind::CloseBrace))?;
-
-            let body = Box::new(Expr {
-                span: Span {
-                    start: open.span.start,
-                    end: close.span.end,
-                },
-                kind: ExprKind::Object {
-                    definitions: body_defs,
-                },
-            });
-
-            a = Expr {
-                span: Span {
-                    start: a.span.start,
-                    end: body.span.end,
-                },
-                kind: ExprKind::Lambda {
-                    arg: Box::new(a),
-                    body,
-                },
+                Ok(Expr {
+                    span: Span {
+                        start,
+                        end: inner.span.end,
+                    },
+                    kind: ExprKind::Branch {
+                        cond: Box::new(cond),
+                        on_true: Box::new(on_true),
+                        on_false: Some(Box::new(inner)),
+                    },
+                })
             }
+        } else {
+            Ok(Expr {
+                span: Span {
+                    start,
+                    end: on_true.span.end,
+                },
+                kind: ExprKind::Branch {
+                    cond: Box::new(cond),
+                    on_true: Box::new(on_true),
+                    on_false: None,
+                },
+            })
         }
-
-        Ok(a)
     }
 
     fn logical(&mut self) -> Result<'s, Expr<'s>> {
@@ -632,6 +626,7 @@ impl<'s, R: CharReader> Parser<'s, R> {
                 self.tokens.next()?;
                 Ok(Some(t))
             } else {
+                println!("{}", std::backtrace::Backtrace::capture());
                 Err(ParseError {
                     span: Some(token.span),
                     kind: ParseErrorKind::Unexpected(Some(token.clone())),
@@ -657,4 +652,9 @@ impl<'s, R: CharReader> Parser<'s, R> {
             Ok(None)
         }
     }
+}
+
+enum NeedsSemi {
+    Yes,
+    No,
 }
