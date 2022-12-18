@@ -277,7 +277,7 @@ impl<'s, R: CharReader> Parser<'s, R> {
                         body,
                     },
                 },
-                NeedsSemi::Yes,
+                NeedsSemi::No,
             );
         }
 

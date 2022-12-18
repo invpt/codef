@@ -189,7 +189,6 @@ impl<'s, R: CharReader> Tokens<'s, R> {
                 }),
                 '+' => self.advance_single(TokenKind::Plus),
                 '*' => self.advance_single(TokenKind::Star),
-                '/' => self.advance_single(TokenKind::Slash),
                 '%' => self.advance_single(TokenKind::Percent),
                 '^' => self.advance_single(TokenKind::Caret),
                 '(' => self.advance_single(TokenKind::OpenParen),
@@ -199,6 +198,23 @@ impl<'s, R: CharReader> Tokens<'s, R> {
                 '{' => self.advance_single(TokenKind::OpenBrace),
                 '}' => self.advance_single(TokenKind::CloseBrace),
                 '"' => self.string(),
+                '/' => {
+                    self.chars.next()?;
+
+                    if let Some((_, '/')) = self.chars.peek()? {
+                        self.chars.next()?;
+                        self.skip_line()?;
+                        continue;
+                    } else {
+                        Ok(Some(Token {
+                            kind: TokenKind::Slash,
+                            span: Span {
+                                start,
+                                end: start + ch.len_utf8(),
+                            },
+                        }))
+                    }
+                }
                 _ if ch.is_alphabetic() || ch == '_' => self.name(),
                 _ if ch.is_ascii_digit() => self.number(),
                 _ => {
@@ -228,6 +244,16 @@ impl<'s, R: CharReader> Tokens<'s, R> {
 }
 
 impl<'s, R: CharReader> Tokens<'s, R> {
+    fn skip_line(&mut self) -> Result<()> {
+        while let Some((_, ch)) = self.chars.next()? {
+            if ch == '\n' {
+                break;
+            }
+        }
+
+        Ok(())
+    }
+
     fn string(&mut self) -> Result<Option<Token<'s>>> {
         let Some((start, ch)) = self.chars.peek()? else {
             return Err(TokenizationError {
