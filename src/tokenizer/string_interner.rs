@@ -16,7 +16,7 @@ impl<'s> StringInterner<'s> {
     pub fn new(storage: &'s StringStorage) -> StringInterner<'s> {
         StringInterner {
             storage,
-            strings: FxHashSet::default()
+            strings: FxHashSet::default(),
         }
     }
 

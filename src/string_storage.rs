@@ -11,7 +11,9 @@ pub struct StringStorage {
 
 impl StringStorage {
     pub fn new() -> StringStorage {
-        StringStorage { strings: RefCell::new(Vec::new()) }
+        StringStorage {
+            strings: RefCell::new(Vec::new()),
+        }
     }
 
     pub fn store(&self, string: Box<str>) -> &str {

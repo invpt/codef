@@ -1,6 +1,9 @@
-use std::{marker::PhantomData, io};
+use std::{io, marker::PhantomData};
 
-use crate::{parser::ParseErrorKind, tokenizer::{TokenizationError, TokenizationErrorKind, Span}};
+use crate::{
+    parser::ParseErrorKind,
+    tokenizer::{Span, TokenizationError, TokenizationErrorKind},
+};
 
 pub struct ErrorStream<'s> {
     phantom: PhantomData<&'s str>,
@@ -8,7 +11,9 @@ pub struct ErrorStream<'s> {
 
 impl<'s> ErrorStream<'s> {
     pub fn new() -> ErrorStream<'s> {
-        ErrorStream { phantom: PhantomData }
+        ErrorStream {
+            phantom: PhantomData,
+        }
     }
 
     pub fn warning(&self, warning: impl Into<CompilationError<'s>>) {

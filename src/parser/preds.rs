@@ -2,7 +2,9 @@
 
 use crate::tokenizer::Token;
 
-pub fn to_bpred<'s, T>(pred: impl Fn(&Token<'s>) -> Option<T>) -> impl Fn(&Token<'s>) -> Option<()> {
+pub fn to_bpred<'s, T>(
+    pred: impl Fn(&Token<'s>) -> Option<T>,
+) -> impl Fn(&Token<'s>) -> Option<()> {
     move |t| match pred(t) {
         Some(_) => Some(()),
         None => None,

@@ -12,11 +12,17 @@ pub struct CharReaderSaver<'r, R> {
 
 impl<'r, R: CharReader> CharReaderSaver<'r, R> {
     pub fn new(chars: &'r mut R) -> CharReaderSaver<'r, R> {
-        CharReaderSaver { chars, saved: String::new() }
+        CharReaderSaver {
+            chars,
+            saved: String::new(),
+        }
     }
 
     pub fn with_capacity(chars: &'r mut R, capacity: usize) -> CharReaderSaver<'r, R> {
-        CharReaderSaver { chars, saved: String::with_capacity(capacity) }
+        CharReaderSaver {
+            chars,
+            saved: String::with_capacity(capacity),
+        }
     }
 
     pub fn finish(self) -> String {
@@ -72,7 +78,7 @@ impl<const BUF_SIZE: usize, R: Read> IoCharReader<BUF_SIZE, R> {
         self.len = self.read.read(&mut self.buf[self.overflow..])? + self.overflow;
 
         if self.len == 0 {
-            return Ok(())
+            return Ok(());
         }
 
         let buf = &self.buf[..self.len];
@@ -95,13 +101,12 @@ impl<const BUF_SIZE: usize, R: Read> IoCharReader<BUF_SIZE, R> {
             }
         }
     }
-
 }
 
 impl<const BUF_SIZE: usize, R: Read> CharReader for IoCharReader<BUF_SIZE, R> {
     fn next(&mut self) -> io::Result<Option<(usize, char)>> {
         if let Some(peek) = self.peek.take() {
-            return Ok(Some(peek))
+            return Ok(Some(peek));
         }
 
         if self.cursor >= self.len {
@@ -109,9 +114,7 @@ impl<const BUF_SIZE: usize, R: Read> CharReader for IoCharReader<BUF_SIZE, R> {
         }
 
         // SAFETY: We verify the validity of the bytes in `fill_buffer`.
-        let s = unsafe {
-            std::str::from_utf8_unchecked(&self.buf[self.cursor..self.len])
-        };
+        let s = unsafe { std::str::from_utf8_unchecked(&self.buf[self.cursor..self.len]) };
 
         if let Some(ch) = s.chars().next() {
             self.cursor += ch.len_utf8();

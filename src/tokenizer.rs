@@ -1,10 +1,13 @@
-use std::{io, hash::Hash};
+use std::{hash::Hash, io};
 
-use crate::{char_reader::{CharReader, CharReaderSaver}, string_storage::StringStorage};
+use crate::{
+    char_reader::{CharReader, CharReaderSaver},
+    string_storage::StringStorage,
+};
 
 mod string_interner;
 
-use string_interner::{StringInterner};
+use string_interner::StringInterner;
 
 #[derive(Debug)]
 pub struct TokenizationError {
@@ -21,7 +24,10 @@ pub enum TokenizationErrorKind {
 
 impl From<io::Error> for TokenizationError {
     fn from(err: io::Error) -> Self {
-        TokenizationError { kind: TokenizationErrorKind::Io(err), span: None }
+        TokenizationError {
+            kind: TokenizationErrorKind::Io(err),
+            span: None,
+        }
     }
 }
 
@@ -123,13 +129,17 @@ impl<'s> Token<'s> {
 
 impl<'s, R: CharReader> Tokens<'s, R> {
     pub fn of(chars: R, string_storage: &'s StringStorage) -> Tokens<'s, R> {
-        Tokens { chars, strings: StringInterner::new(string_storage), peek: None }
+        Tokens {
+            chars,
+            strings: StringInterner::new(string_storage),
+            peek: None,
+        }
     }
-    
+
     /// Reads the next token from in input stream.
     pub fn next(&mut self) -> Result<Option<Token<'s>>> {
         if let Some(peek) = self.peek.take() {
-            return Ok(Some(peek))
+            return Ok(Some(peek));
         }
 
         while let Some((start, ch)) = self.chars.peek()? {
@@ -195,7 +205,10 @@ impl<'s, R: CharReader> Tokens<'s, R> {
                     self.chars.next()?;
                     Err(TokenizationError {
                         kind: TokenizationErrorKind::Unexpected,
-                        span: Some(Span { start, end: start + ch.len_utf8() }),
+                        span: Some(Span {
+                            start,
+                            end: start + ch.len_utf8(),
+                        }),
                     })
                 }
             };
