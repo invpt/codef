@@ -149,6 +149,7 @@ impl<'s, R: CharReader> Parser<'s, R> {
             });
         }
 
+        let mut defs;
         let mut body;
         if !self.has_peek(bpred!(TokenKind::Def))? {
             let first = self.tuple()?;
@@ -156,11 +157,13 @@ impl<'s, R: CharReader> Parser<'s, R> {
             if self.eat(&end_pred)?.is_some() {
                 return Ok(first);
             } else {
-                body = vec![Item::Expr(first)];
+                defs = vec![];
+                body = vec![first];
 
                 self.require(bpred!(TokenKind::Semicolon))?;
             }
         } else {
+            defs = Vec::new();
             body = Vec::new();
         }
 
@@ -169,10 +172,10 @@ impl<'s, R: CharReader> Parser<'s, R> {
             if self.has_peek(to_bpred(&end_pred))? {
                 break;
             } else if self.has_peek(bpred!(TokenKind::Def))? {
-                body.push(Item::Def(self.def()?))
+                defs.push(self.def()?)
             } else {
                 let expr = self.tuple()?;
-                body.push(Item::Expr(expr));
+                body.push(expr);
 
                 if self.eat(bpred!(TokenKind::Semicolon))?.is_none() {
                     semi = false;
@@ -184,7 +187,10 @@ impl<'s, R: CharReader> Parser<'s, R> {
         }
 
         if semi {
-            body.push(Item::Empty);
+            body.push(Expr {
+                kind: ExprKind::Empty,
+                span: Span { start: 0, end: 0 },
+            });
         }
 
         let close = self.require(&end_pred)?;
@@ -195,7 +201,10 @@ impl<'s, R: CharReader> Parser<'s, R> {
         };
 
         Ok(Expr {
-            kind: ExprKind::Scope { body: body.into() },
+            kind: ExprKind::Scope {
+                defs: defs.into(),
+                body: body.into(),
+            },
             span,
         })
     }

@@ -12,12 +12,15 @@ pub enum ExprKind<'s> {
         defs: Box<[Def<'s>]>,
     },
     Scope {
-        defs: Box<[Def<'s>]>,
-        body: Box<[Expr<'s>]>,
+        body: Box<[Item<'s>]>,
     },
     Lambda {
         arg: Box<Expr<'s>>,
         body: Box<Expr<'s>>,
+    },
+    SqLambda {
+        arg: Box<Expr<'s>>,
+        expr: Box<Expr<'s>>,
     },
     BinOp {
         op: BinOp,
@@ -49,21 +52,27 @@ pub enum ExprKind<'s> {
         b: Box<Expr<'s>>,
     },
     Variant(Box<[VariantItem<'s>]>),
-    Ident(Intern<'s>),
+    Local(usize),
     Literal(Literal<'s>),
+}
+
+#[derive(Debug)]
+pub enum Item<'s> {
+    Def(Def<'s>),
+    Expr(Expr<'s>),
     Empty,
 }
 
 #[derive(Debug)]
 pub struct VariantItem<'s> {
-    pub name: Intern<'s>,
+    pub name: usize,
     pub value: Option<Expr<'s>>,
     pub span: Span,
 }
 
 #[derive(Debug)]
 pub struct Def<'s> {
-    pub name: Intern<'s>,
+    pub name: usize,
     pub value: Box<Expr<'s>>,
     pub span: Span,
 }
@@ -95,8 +104,6 @@ pub enum BinOp {
 #[derive(Debug)]
 pub enum UnOp {
     Not,
-    Set,
-    Val,
     Ref,
     Deref,
 }
