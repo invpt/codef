@@ -8,13 +8,8 @@ pub struct Expr<'s> {
 
 #[derive(Debug)]
 pub enum ExprKind<'s> {
-    Object {
-        defs: Box<[Def<'s>]>,
-    },
-    Scope {
-        defs: Box<[Def<'s>]>,
-        body: Box<[Expr<'s>]>,
-    },
+    Object(Box<Scope<'s>>),
+    Block(Box<Scope<'s>>),
     Lambda {
         arg: Box<Expr<'s>>,
         body: Box<Expr<'s>>,
@@ -30,7 +25,7 @@ pub enum ExprKind<'s> {
     },
     Access {
         expr: Box<Expr<'s>>,
-        prop: Intern<'s>,
+        prop: AccessRhs<'s>,
     },
     Branch {
         cond: Box<Expr<'s>>,
@@ -51,7 +46,13 @@ pub enum ExprKind<'s> {
     Variant(Box<[VariantItem<'s>]>),
     Ident(Intern<'s>),
     Literal(Literal<'s>),
-    Empty,
+}
+
+#[derive(Debug)]
+pub struct Scope<'s> {
+    pub defs: Box<[Def<'s>]>,
+    pub body: Box<[Expr<'s>]>,
+    pub trailing_semi: bool,
 }
 
 #[derive(Debug)]
@@ -99,4 +100,10 @@ pub enum UnOp {
     Val,
     Ref,
     Deref,
+}
+
+#[derive(Debug)]
+pub enum AccessRhs<'s> {
+    Prop(Intern<'s>),
+    Expr(Box<Expr<'s>>),
 }

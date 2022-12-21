@@ -48,37 +48,31 @@ struct Parser<'s, R> {
 
 impl<'s, R: CharReader> Parser<'s, R> {
     fn parse(mut self) -> Result<'s, Expr<'s>> {
-        let definitions = self.object_body(vpred!())?;
+        let scope = self.scope(vpred!())?;
 
-        if let (Some(first), Some(last)) = (definitions.first(), definitions.last()) {
-            let span = Span {
-                start: first.span.start,
-                end: last.span.end,
-            };
+        let (kind, span) = match scope {
+            ParsedScope::Scope(scope) => {
+                let mut spans = [
+                    scope.defs.first().map(|d| d.span.start),
+                    scope.body.first().map(|e| e.span.start),
+                    scope.defs.last().map(|d| d.span.end),
+                    scope.body.last().map(|e| e.span.end),
+                ]
+                .into_iter()
+                .filter_map(std::convert::identity);
 
-            Ok(Expr {
-                kind: ExprKind::Object { defs: definitions },
-                span,
-            })
-        } else {
-            Ok(Expr {
-                kind: ExprKind::Object { defs: Box::new([]) },
-                span: Span { start: 0, end: 0 },
-            })
-        }
-    }
+                (
+                    ExprKind::Object(Box::new(scope)),
+                    Span {
+                        start: spans.next().unwrap_or(0),
+                        end: spans.last().unwrap_or(0),
+                    },
+                )
+            }
+            ParsedScope::Expr { kind, span } => (kind, span.unwrap_or(Span { start: 0, end: 0 })),
+        };
 
-    fn object_body(
-        &mut self,
-        end_pred: impl Fn(&Token<'s>) -> Option<()>,
-    ) -> Result<'s, Box<[Def<'s>]>> {
-        let mut defs = Vec::new();
-
-        while let Some(None) = self.tokens.peek()?.map(&end_pred) {
-            defs.push(self.def()?)
-        }
-
-        Ok(defs.into())
+        Ok(Expr { kind, span })
     }
 
     fn def(&mut self) -> Result<'s, Def<'s>> {
@@ -107,21 +101,34 @@ impl<'s, R: CharReader> Parser<'s, R> {
 
     fn block_needs_semi(&mut self) -> Result<'s, (Expr<'s>, NeedsSemi)> {
         if let Some(open) = self.eat(tpred!(TokenKind::OpenBrace))? {
-            Ok((
-                self.scope(open.span.start, tpred!(TokenKind::CloseBrace))?,
-                NeedsSemi::No,
-            ))
-        } else if let Some(open) = self.eat(tpred!(TokenKind::DotOpenBrace))? {
-            let body_defs = self.object_body(bpred!(TokenKind::CloseBrace))?;
+            let scope = self.scope(bpred!(TokenKind::CloseBrace))?;
             let close = self.require(tpred!(TokenKind::CloseBrace))?;
-
             Ok((
                 Expr {
                     span: Span {
                         start: open.span.start,
                         end: close.span.end,
                     },
-                    kind: ExprKind::Object { defs: body_defs },
+                    kind: match scope {
+                        ParsedScope::Scope(scope) => ExprKind::Block(Box::new(scope)),
+                        ParsedScope::Expr { kind, .. } => kind,
+                    },
+                },
+                NeedsSemi::No,
+            ))
+        } else if let Some(open) = self.eat(tpred!(TokenKind::DotOpenBrace))? {
+            let scope = self.scope(bpred!(TokenKind::CloseBrace))?;
+            let close = self.require(tpred!(TokenKind::CloseBrace))?;
+            Ok((
+                Expr {
+                    span: Span {
+                        start: open.span.start,
+                        end: close.span.end,
+                    },
+                    kind: match scope {
+                        ParsedScope::Scope(scope) => ExprKind::Object(Box::new(scope)),
+                        ParsedScope::Expr { kind, .. } => kind, // TODO: return Err here
+                    },
                 },
                 NeedsSemi::No,
             ))
@@ -132,20 +139,14 @@ impl<'s, R: CharReader> Parser<'s, R> {
 
     fn scope(
         &mut self,
-        start: usize,
-        end_pred: impl Fn(&Token<'s>) -> Option<Token<'s>>,
-    ) -> Result<'s, Expr<'s>> {
-        if let Some(close) = self.eat(&end_pred)? {
-            let span = Span {
-                start,
-                end: close.span.end,
-            };
-
-            return Ok(Expr {
+        end_pred: impl Fn(&Token<'s>) -> Option<()>,
+    ) -> Result<'s, ParsedScope<'s>> {
+        if self.has_peek(&end_pred)? {
+            return Ok(ParsedScope::Expr {
                 kind: ExprKind::Tuple {
                     items: Box::new([]),
                 },
-                span,
+                span: None,
             });
         }
 
@@ -154,8 +155,11 @@ impl<'s, R: CharReader> Parser<'s, R> {
         if !self.has_peek(bpred!(TokenKind::Def))? {
             let first = self.tuple()?;
 
-            if self.eat(&end_pred)?.is_some() {
-                return Ok(first);
+            if self.has_peek(&end_pred)? {
+                return Ok(ParsedScope::Expr {
+                    kind: first.kind,
+                    span: Some(first.span),
+                });
             } else {
                 defs = vec![];
                 body = vec![first];
@@ -186,27 +190,11 @@ impl<'s, R: CharReader> Parser<'s, R> {
             }
         }
 
-        if semi {
-            body.push(Expr {
-                kind: ExprKind::Empty,
-                span: Span { start: 0, end: 0 },
-            });
-        }
-
-        let close = self.require(&end_pred)?;
-
-        let span = Span {
-            start,
-            end: close.span.end,
-        };
-
-        Ok(Expr {
-            kind: ExprKind::Scope {
-                defs: defs.into(),
-                body: body.into(),
-            },
-            span,
-        })
+        Ok(ParsedScope::Scope(Scope {
+            defs: defs.into(),
+            body: body.into(),
+            trailing_semi: semi,
+        }))
     }
 
     fn tuple(&mut self) -> Result<'s, Expr<'s>> {
@@ -248,42 +236,53 @@ impl<'s, R: CharReader> Parser<'s, R> {
         let mut a = self.expr_needs_semi()?;
 
         if let Some(open) = self.eat(tpred!(TokenKind::OpenBrace))? {
-            let body = self.scope(open.span.start, tpred!(TokenKind::CloseBrace))?;
+            let scope = self.scope(bpred!(TokenKind::CloseBrace))?;
+            let close = self.require(tpred!(TokenKind::CloseBrace))?;
 
             a = (
                 Expr {
                     span: Span {
                         start: a.0.span.start,
-                        end: body.span.end,
+                        end: close.span.end,
                     },
                     kind: ExprKind::Lambda {
                         arg: Box::new(a.0),
-                        body: Box::new(body),
+                        body: Box::new(Expr {
+                            kind: match scope {
+                                ParsedScope::Scope(scope) => ExprKind::Block(Box::new(scope)),
+                                ParsedScope::Expr { kind, .. } => kind,
+                            },
+                            span: Span {
+                                start: open.span.start,
+                                end: close.span.end,
+                            },
+                        }),
                     },
                 },
                 NeedsSemi::No,
             );
         } else if let Some(open) = self.eat(tpred!(TokenKind::DotOpenBrace))? {
-            let body_defs = self.object_body(bpred!(TokenKind::CloseBrace))?;
+            let scope = self.scope(bpred!(TokenKind::CloseBrace))?;
             let close = self.require(tpred!(TokenKind::CloseBrace))?;
-
-            let body = Box::new(Expr {
-                span: Span {
-                    start: open.span.start,
-                    end: close.span.end,
-                },
-                kind: ExprKind::Object { defs: body_defs },
-            });
 
             a = (
                 Expr {
                     span: Span {
                         start: a.0.span.start,
-                        end: body.span.end,
+                        end: close.span.end,
                     },
                     kind: ExprKind::Lambda {
                         arg: Box::new(a.0),
-                        body,
+                        body: Box::new(Expr {
+                            kind: match scope {
+                                ParsedScope::Scope(scope) => ExprKind::Block(Box::new(scope)),
+                                ParsedScope::Expr { kind, .. } => kind, // TODO: return Err here
+                            },
+                            span: Span {
+                                start: open.span.start,
+                                end: close.span.end,
+                            },
+                        }),
                     },
                 },
                 NeedsSemi::No,
@@ -334,11 +333,32 @@ impl<'s, R: CharReader> Parser<'s, R> {
     fn case_inner(&mut self, start: usize) -> Result<'s, Expr<'s>> {
         let cond = self.expr()?;
         let on_true_open = self.require(tpred!(TokenKind::OpenBrace))?;
-        let on_true = self.scope(on_true_open.span.start, tpred!(TokenKind::CloseBrace))?;
+        let on_true = self.scope(bpred!(TokenKind::CloseBrace))?;
+        let on_true_close = self.require(tpred!(TokenKind::CloseBrace))?;
+        let on_true = Expr {
+            span: Span {
+                start: on_true_open.span.start,
+                end: on_true_close.span.end,
+            },
+            kind: match on_true {
+                ParsedScope::Scope(scope) => ExprKind::Block(Box::new(scope)),
+                ParsedScope::Expr { kind, .. } => kind,
+            },
+        };
         if let Some(r#else) = self.eat(tpred!(TokenKind::Else))? {
             if let Some(on_false_open) = self.eat(tpred!(TokenKind::OpenBrace))? {
-                let on_false =
-                    self.scope(on_false_open.span.start, tpred!(TokenKind::CloseBrace))?;
+                let on_false = self.scope(bpred!(TokenKind::CloseBrace))?;
+                let on_false_close = self.require(tpred!(TokenKind::CloseBrace))?;
+                let on_false = Expr {
+                    span: Span {
+                        start: on_false_open.span.start,
+                        end: on_false_close.span.end,
+                    },
+                    kind: match on_false {
+                        ParsedScope::Scope(scope) => ExprKind::Block(Box::new(scope)),
+                        ParsedScope::Expr { kind, .. } => kind,
+                    },
+                };
 
                 Ok(Expr {
                     span: Span {
@@ -494,7 +514,7 @@ impl<'s, R: CharReader> Parser<'s, R> {
                 a = Expr {
                     kind: ExprKind::Access {
                         expr: Box::new(a),
-                        prop,
+                        prop: AccessRhs::Prop(prop),
                     },
                     span,
                 }
@@ -519,9 +539,18 @@ impl<'s, R: CharReader> Parser<'s, R> {
 
     fn maybe_atom(&mut self) -> Result<'s, Option<Expr<'s>>> {
         if let Some(open) = self.eat(tpred!(TokenKind::OpenParen))? {
-            Ok(Some(
-                self.scope(open.span.start, tpred!(TokenKind::CloseParen))?,
-            ))
+            let scope = self.scope(bpred!(TokenKind::CloseParen))?;
+            let close = self.require(tpred!(TokenKind::CloseParen))?;
+            Ok(Some(Expr {
+                span: Span {
+                    start: open.span.start,
+                    end: close.span.end,
+                },
+                kind: match scope {
+                    ParsedScope::Scope(scope) => ExprKind::Block(Box::new(scope)),
+                    ParsedScope::Expr { kind, .. } => kind,
+                },
+            }))
         } else if self.has_peek(bpred!(TokenKind::Pipe))? {
             Ok(Some(self.variant()?))
         } else if let Some((span, kind)) = self.eat(vpred! {
@@ -666,4 +695,12 @@ impl<'s, R: CharReader> Parser<'s, R> {
 enum NeedsSemi {
     Yes,
     No,
+}
+
+enum ParsedScope<'s> {
+    Scope(Scope<'s>),
+    Expr {
+        kind: ExprKind<'s>,
+        span: Option<Span>,
+    },
 }
