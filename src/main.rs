@@ -6,6 +6,7 @@ mod parser;
 mod string_storage;
 mod tokenizer;
 mod resolver;
+mod parse_manager;
 
 fn main() {
     let path = std::env::args().nth(1).unwrap();
