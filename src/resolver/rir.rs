@@ -8,11 +8,19 @@ pub struct Expr<'s> {
 
 #[derive(Debug)]
 pub enum ExprKind<'s> {
-    Object(Box<Scope<'s>>),
-    Block(Box<Scope<'s>>),
+    Object {
+        defs: Box<[Def<'s>]>,
+    },
+    Scope {
+        body: Box<[Item<'s>]>,
+    },
     Lambda {
         arg: Box<Expr<'s>>,
         body: Box<Expr<'s>>,
+    },
+    SqLambda {
+        arg: Box<Expr<'s>>,
+        expr: Box<Expr<'s>>,
     },
     BinOp {
         op: BinOp,
@@ -25,7 +33,7 @@ pub enum ExprKind<'s> {
     },
     Access {
         expr: Box<Expr<'s>>,
-        prop: AccessRhs<'s>,
+        prop: Intern<'s>,
     },
     Branch {
         cond: Box<Expr<'s>>,
@@ -44,27 +52,27 @@ pub enum ExprKind<'s> {
         b: Box<Expr<'s>>,
     },
     Variant(Box<[VariantItem<'s>]>),
-    Ident(Intern<'s>),
+    Local(usize),
     Literal(Literal<'s>),
 }
 
 #[derive(Debug)]
-pub struct Scope<'s> {
-    pub defs: Box<[Def<'s>]>,
-    pub body: Box<[Expr<'s>]>,
-    pub trailing_semi: bool,
+pub enum Item<'s> {
+    Def(Def<'s>),
+    Expr(Expr<'s>),
+    Empty,
 }
 
 #[derive(Debug)]
 pub struct VariantItem<'s> {
-    pub name: Intern<'s>,
+    pub name: usize,
     pub value: Option<Expr<'s>>,
     pub span: Span,
 }
 
 #[derive(Debug)]
 pub struct Def<'s> {
-    pub name: Intern<'s>,
+    pub name: usize,
     pub value: Box<Expr<'s>>,
     pub span: Span,
 }
@@ -96,14 +104,6 @@ pub enum BinOp {
 #[derive(Debug)]
 pub enum UnOp {
     Not,
-    Set,
-    Val,
     Ref,
     Deref,
-}
-
-#[derive(Debug)]
-pub enum AccessRhs<'s> {
-    Prop(Intern<'s>),
-    Expr(Box<Expr<'s>>),
 }

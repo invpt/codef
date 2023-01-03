@@ -3,22 +3,20 @@ use super::*;
 pub fn ast_size(expr: &Expr) -> usize {
     std::mem::size_of::<Expr>()
         + match &expr.kind {
-            ExprKind::Object { defs: definitions } => definitions.iter().map(def_size).sum(),
-            ExprKind::Scope { body, .. } => {
-                body.iter()
-                    .map(|it| match it {
-                        Item::Expr(e) => ast_size(e) + 8,
-                        Item::Def(d) => def_size(d) + 8,
-                        Item::Empty => 8,
-                    })
-                    .sum()
-                //0//defs.iter().map(def_size).sum::<usize>() + body.iter().map(ast_size).sum::<usize>()
+            ExprKind::Object(scope) | ExprKind::Block(scope) => {
+                scope.body.iter().map(ast_size).sum::<usize>()
+                    + scope.defs.iter().map(def_size).sum::<usize>()
             }
             ExprKind::Lambda { arg, body } => ast_size(arg) + ast_size(body),
-            ExprKind::SqLambda { arg, expr } => ast_size(expr) + ast_size(arg),
             ExprKind::BinOp { lhs, rhs, .. } => ast_size(lhs) + ast_size(rhs),
             ExprKind::UnOp { arg, .. } => ast_size(arg),
-            ExprKind::Access { expr, prop } => ast_size(expr) + prop.0.len(),
+            ExprKind::Access { expr, prop } => {
+                ast_size(expr)
+                    + match prop {
+                        AccessRhs::Prop(prop) => prop.0.len(),
+                        AccessRhs::Expr(expr) => ast_size(expr),
+                    }
+            }
             ExprKind::Branch {
                 cond,
                 on_true,
