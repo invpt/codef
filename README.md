@@ -1,4 +1,4 @@
-# Radio
+# Radi
 
 This repository holds an experimental programming language. At the moment, all that is here is
 an incomplete tokenizer and parser.
@@ -12,7 +12,7 @@ Next goals:
 
 ## Syntax inspiration
 
-Radio's syntax is insipred by a number of languages, the most apparent of which being Scala.
+Radi's syntax is insipred by a number of languages, the most apparent of which being Scala.
 Personally, I have never used Scala, but it turns out that I quite like its syntax.
 
 ## Wild ideas
