@@ -1,4 +1,63 @@
+use rustc_hash::FxHashMap;
+
 use crate::tokenizer::{Intern, Span};
+
+#[derive(Debug)]
+pub struct Module<'s> {
+    pub defs: FxHashMap<DefRef, Proc<'s>>,
+}
+
+#[derive(Debug)]
+pub struct Proc<'s> {
+    pub name: Intern<'s>,
+    pub vars: FxHashMap<VarRef, Var<'s>>,
+    pub stmts: Box<[Stmt<'s>]>,
+}
+
+#[derive(Debug)]
+pub struct Stmt<'s> {
+    kind: StmtKind<'s>,
+    span: Option<Span>,
+}
+
+#[derive(Debug)]
+pub enum StmtKind<'s> {
+    Case {
+        cond: Expr<'s>,
+        on_true: Box<[Stmt<'s>]>,
+        on_false: Box<[Stmt<'s>]>,
+    },
+    For {
+        init: Option<Box<Stmt<'s>>>,
+        cond: Expr<'s>,
+        afterthought: Option<Box<Stmt<'s>>>,
+        body: Box<[Stmt<'s>]>,
+    },
+    Init {
+        var: VarRef,
+        value: Expr<'s>,
+    },
+    Set {
+        var: VarRef,
+        value: Expr<'s>,
+    },
+    Return(ExprKind<'s>),
+    Expr(ExprKind<'s>),
+}
+
+#[derive(Debug)]
+pub struct Var<'s> {
+    name: Intern<'s>,
+    mutable: bool,
+    ty: Option<Expr<'s>>
+}
+
+#[derive(Debug, PartialEq, Eq, Hash)]
+pub struct VarRef(pub(super) usize);
+
+#[derive(Debug, PartialEq, Eq, Hash)]
+pub struct DefRef(pub(super) usize);
+
 
 #[derive(Debug)]
 pub struct Scope<'s> {

@@ -3,7 +3,7 @@
 version = 3
 
 [[package]]
-name = "radi"
+name = "codef"
 version = "0.1.0"
 dependencies = [
  "rustc-hash",

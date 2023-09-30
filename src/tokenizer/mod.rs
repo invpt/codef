@@ -57,6 +57,7 @@ pub enum TokenKind<'s> {
     Def,
     Use,
     Val,
+    Var,
     Set,
     Type,
     Case,
@@ -73,6 +74,7 @@ pub enum TokenKind<'s> {
     Bang,
     Pipe,
     Amp,
+    Dollar,
     ThinArrow,
     FatArrow,
     ColonEqual,
@@ -90,6 +92,7 @@ pub enum TokenKind<'s> {
     Caret,
     AmpAmp,
     PipePipe,
+    Backslash,
     OpenParen,
     CloseParen,
     OpenBracket,
@@ -121,12 +124,6 @@ impl<'s> Hash for Intern<'s> {
     }
 }
 
-impl<'s> Token<'s> {
-    fn new(kind: TokenKind<'s>, span: Span) -> Token<'s> {
-        Token { kind, span }
-    }
-}
-
 impl<'s, R: CharReader> Tokens<'s, R> {
     pub fn of(chars: R, string_storage: &'s StringStorage) -> Tokens<'s, R> {
         Tokens {
@@ -136,7 +133,7 @@ impl<'s, R: CharReader> Tokens<'s, R> {
         }
     }
 
-    /// Reads the next token from in input stream.
+    /// Reads the next token from the input stream.
     pub fn next(&mut self) -> Result<Option<Token<'s>>> {
         if let Some(peek) = self.peek.take() {
             return Ok(Some(peek));
@@ -152,6 +149,7 @@ impl<'s, R: CharReader> Tokens<'s, R> {
                     '{' => Some(TokenKind::DotOpenBrace),
                     _ => None,
                 }),
+                '$' => self.advance_single(TokenKind::Dollar),
                 ',' => self.advance_single(TokenKind::Comma),
                 ':' => self.advance_double(TokenKind::Colon, |ch| match ch {
                     ':' => Some(TokenKind::ColonColon),
@@ -191,6 +189,7 @@ impl<'s, R: CharReader> Tokens<'s, R> {
                 '*' => self.advance_single(TokenKind::Star),
                 '%' => self.advance_single(TokenKind::Percent),
                 '^' => self.advance_single(TokenKind::Caret),
+                '\\' => self.advance_single(TokenKind::Backslash),
                 '(' => self.advance_single(TokenKind::OpenParen),
                 ')' => self.advance_single(TokenKind::CloseParen),
                 '[' => self.advance_single(TokenKind::OpenBracket),
@@ -245,9 +244,7 @@ impl<'s, R: CharReader> Tokens<'s, R> {
             Ok(self.peek.as_ref())
         }
     }
-}
 
-impl<'s, R: CharReader> Tokens<'s, R> {
     fn skip_line(&mut self) -> Result<()> {
         while let Some((_, ch)) = self.chars.next()? {
             if ch == '\n' {
@@ -383,6 +380,7 @@ impl<'s, R: CharReader> Tokens<'s, R> {
                 "def" => TokenKind::Def,
                 "use" => TokenKind::Use,
                 "val" => TokenKind::Val,
+                "var" => TokenKind::Var,
                 "set" => TokenKind::Set,
                 "type" => TokenKind::Type,
                 "case" => TokenKind::Case,
@@ -430,7 +428,7 @@ impl<'s, R: CharReader> Tokens<'s, R> {
             }))
         } else {
             let Ok(value) = saved.parse::<u64>() else {
-                unreachable!("Compiler bug: Unexpected error from parse::<u128>()")
+                unreachable!("Compiler bug: Unexpected error from parse::<u64>()")
             };
 
             Ok(Some(Token {

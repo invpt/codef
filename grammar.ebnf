@@ -1,0 +1,59 @@
+(* ----------------------------------------------------- *)
+(* Codef grammar; used as reference to build the parser. *)
+(* ----------------------------------------------------- *)
+
+scope = { def | type | termcase | termfor | termabs | smalltup, ";" }, [ largetup ] ;
+def = "def", name, termabs ;
+type = "type", name, suffix, ";" ;
+
+(* Special 'terminated' versions of some rules, to allow e.g. if
+   statements not having a semicolon after the closing bracket *)
+termabs = [ expr ], [ "->", expr  ], termthunk ;
+termthunk = [ "$" ], "=>", expr, ";" | [ "$" ], "{", scope, "}" ;
+termcase = "case", expr, termthunk,
+         { "else", expr, termthunk },
+         [ "else", termthunk ] ;
+termfor = "for", expr,
+          [ ";", expr,
+          [ ";", expr  ] ],
+          termthunk ;
+
+(* Non-terminated (expression-level) versions of the above rules. *)
+abs = [ expr ], [ "->", expr ], thunk ;
+thunk = [ "$" ], "=>", expr | [ "$" ], "{", scope, "}" ;
+case = "case", expr, thunk,
+     { "else", expr, thunk },
+     [ "else", thunk ] ;
+for = "for", expr,
+      [ ";", expr,
+      [ ";", expr  ] ],
+      thunk ;
+
+largetup = ( case | for | abs | expr ), { ",", ( case | for | abs | expr ) }, [ "," ] ;
+smalltup = expr, { ",", expr }, [ "," ] ;
+
+expr     = logical ;
+logical  = logicor ;
+logicor  = [ logicor, "||" ], logicand ;
+logicand = [ logicand, "&&" ], cmp;
+
+cmp = [ bitwise, ( "=" | "!=" | "<" | "<=" | ">" | ">=" | "<-" ) ], assertion ;
+
+assertion = [ bitwise, "::" ], bitwise ;
+
+bitwise = bitor ;
+bitor   = [ bitor, "|" ], bitxor ;
+bitxor  = [ bitxor, "~" ], bitand ;
+bitand  = [ bitand, "&" ], shift ;
+
+shift = [ shift, ( "<<" | ">>" ) ], arith ;
+
+arith = [ arith, ( "+" | "-" ) ], term ;
+
+term = [ term, ( "*" | "/" | "%" ) ], prefix ;
+
+prefix = { "val" | "var" | "set" | "!" | "-" }, suffix ;
+
+suffix = atom, { atom } ;
+
+atom = name | num | string | "\", name | "(", scope, ")" ;
