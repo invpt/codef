@@ -1,3 +1,4 @@
+def print => "";
 def main() {
     print("Hello, world!");
 }

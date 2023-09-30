@@ -24,10 +24,10 @@ pub struct Expr<'s> {
 pub enum ExprKind<'s> {
     Scope(Scope<'s>),
     Abstract {
-        arg: Option<Box<Expr<'s>>>,
         spec: bool,
-        ty: Option<Box<Expr<'s>>>,
+        arg: Option<Box<Expr<'s>>>,
         body: Box<Expr<'s>>,
+        ty: Option<Box<Expr<'s>>>,
     },
     For {
         init: Option<Box<Expr<'s>>>,
@@ -50,9 +50,9 @@ pub enum ExprKind<'s> {
     Binary(BinOp, Box<Expr<'s>>, Box<Expr<'s>>),
     Unary(UnOp, Box<Expr<'s>>),
     Apply(Box<Expr<'s>>, Box<Expr<'s>>),
-    Solve(Solve, Box<Expr<'s>>),
-    Literal(Literal<'s>),
+    Solve(SolveMarker, Intern<'s>),
     Name(Intern<'s>),
+    Literal(Literal<'s>),
 }
 
 #[derive(Debug)]
@@ -85,7 +85,7 @@ pub enum UnOp {
 }
 
 #[derive(Debug)]
-pub enum Solve {
+pub enum SolveMarker {
     Val,
     Var,
     Set,

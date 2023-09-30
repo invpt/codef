@@ -1,20 +1,5 @@
-// The dollar sign means "do the specialization with these arguments when the function is called"
-def compile(val expr :: Expr) -> (Int => Int) $=> (val arg :: Int) -> Int => eval(expr, arg);
-
-def main() {
-    val src = readline();
-    val expr = parse(src);
-    val calc = compile(expr);
-
-    // Now we can evaluate this function a bunch without paying the interpretation
-    // penalty every time!
-    val total = 0;
-    for var i = 0; i < 1000000000; set i = i + 1 {
-        set total = total + calc(i);
-    }
-
-    print("Total from zero to a billion: "  + total );
-}
+type String "TODO";
+type Int "TODO";
 
 // Simple AST, parser, and tree-walking interpreter for single-arg functions.
 type Expr \Add;
@@ -31,4 +16,22 @@ def eval(val expr :: Expr, val arg :: Int) -> Int {
     } else expr = Expr\Arg {
         arg
     }
+}
+
+// The dollar sign means "do the specialization with these arguments when the function is called"
+def compile(val expr :: Expr) -> (Int => Int) $=> (val arg :: Int) -> Int => eval(expr, arg);
+
+def main() {
+    val src = readline();
+    val expr = parse(src);
+    val calc = compile(expr);
+
+    // Now we can evaluate this function a bunch without paying the interpretation
+    // penalty every time!
+    val total = 0;
+    for var i = 0; i < 1000000000; set i = i + 1 {
+        set total = total + calc(i);
+    }
+
+    print("Total from zero to a billion: "  + total );
 }

@@ -1,7 +1,7 @@
 use crate::{
     char_reader::CharReader,
     errors::ErrorStream,
-    tokenizer::{Span, Token, TokenKind, TokenizationError, Tokens},
+    tokenizer::{Intern, Span, Token, TokenKind, TokenizationError, Tokens},
 };
 
 mod ast;
@@ -156,9 +156,9 @@ impl<'s, R: CharReader> Parser<'s, R> {
     }
 
     fn termexpr(&mut self) -> Result<'s, Expr<'s>> {
-        let logical = self.logical()?;
-
-        if self.has_peek(bpred!(TokenKind::Dollar | TokenKind::ThinArrow | TokenKind::FatArrow | TokenKind::OpenBrace))? {
+        if self.has_peek(bpred!(
+            TokenKind::Dollar | TokenKind::ThinArrow | TokenKind::FatArrow | TokenKind::OpenBrace
+        ))? {
             let ty = if self.eat(bpred!(TokenKind::ThinArrow))?.is_some() {
                 Some(self.logical()?)
             } else {
@@ -169,19 +169,49 @@ impl<'s, R: CharReader> Parser<'s, R> {
 
             Ok(Expr {
                 span: Span {
-                    start: logical.span.start,
+                    start: body.span.start,
                     end: body.span.end,
                 },
                 kind: ExprKind::Abstract {
-                    arg: Some(Box::new(logical)),
+                    arg: None,
                     spec,
                     ty: ty.map(Box::new),
                     body: Box::new(body),
                 },
             })
         } else {
-            self.require(bpred!(TokenKind::Semicolon))?;
-            Ok(logical)
+            let logical = self.logical()?;
+
+            if self.has_peek(bpred!(
+                TokenKind::Dollar
+                    | TokenKind::ThinArrow
+                    | TokenKind::FatArrow
+                    | TokenKind::OpenBrace
+            ))? {
+                let ty = if self.eat(bpred!(TokenKind::ThinArrow))?.is_some() {
+                    Some(self.logical()?)
+                } else {
+                    None
+                };
+                let spec = self.eat(bpred!(TokenKind::Dollar))?.is_some();
+                let body = self.termbody()?;
+
+                Ok(Expr {
+                    span: Span {
+                        start: logical.span.start,
+                        end: body.span.end,
+                    },
+                    kind: ExprKind::Abstract {
+                        arg: Some(Box::new(logical)),
+                        spec,
+                        ty: ty.map(Box::new),
+                        body: Box::new(body),
+                    },
+                })
+            } else {
+                self.require(bpred!(TokenKind::Semicolon))?;
+                Ok(logical)
+            }
         }
     }
 
@@ -343,7 +373,9 @@ impl<'s, R: CharReader> Parser<'s, R> {
     fn expr(&mut self) -> Result<'s, Expr<'s>> {
         let logical = self.logical()?;
 
-        if self.has_peek(bpred!(TokenKind::Dollar | TokenKind::ThinArrow | TokenKind::FatArrow | TokenKind::OpenBrace))? {
+        if self.has_peek(bpred!(
+            TokenKind::Dollar | TokenKind::ThinArrow | TokenKind::FatArrow | TokenKind::OpenBrace
+        ))? {
             let ty = if self.eat(bpred!(TokenKind::ThinArrow))?.is_some() {
                 Some(self.logical()?)
             } else {
@@ -469,19 +501,28 @@ impl<'s, R: CharReader> Parser<'s, R> {
                 span,
             })
         } else if let Some((marker_span, marker)) = self.eat(vpred! {
-            :t: TokenKind::Val => (t.span, Solve::Val),
-            :t: TokenKind::Var => (t.span, Solve::Var),
-            :t: TokenKind::Set => (t.span, Solve::Set),
+            :t: TokenKind::Val => (t.span, SolveMarker::Val),
+            :t: TokenKind::Var => (t.span, SolveMarker::Var),
+            :t: TokenKind::Set => (t.span, SolveMarker::Set),
         })? {
-            let a = self.prefix()?;
-            let span = Span {
-                start: marker_span.start,
-                end: a.span.end,
+            let (name_span, name) = self.require(vpred!(:t: TokenKind::Name(n) => (t.span, n)))?;
+            /*let symbol = match marker {
+                Solve::Set => self.scoper.lookup(name),
+                Solve::Val | Solve::Var => Some(self.scoper.new_symbol(name)),
             };
+            let Some(symbol) = symbol else {
+                return Err(ParseError {
+                    kind: ParseErrorKind::UndefinedSymbol(name),
+                    span: Some(name_span),
+                })
+            };*/
 
             Ok(Expr {
-                kind: ExprKind::Solve(marker, Box::new(a)),
-                span,
+                kind: ExprKind::Solve(marker, name),
+                span: Span {
+                    start: marker_span.start,
+                    end: name_span.end,
+                },
             })
         } else {
             self.suffix()
