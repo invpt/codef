@@ -1,1 +1,1 @@
-def sin (val x) => x;
+def sin(val x :: Int) => x * x;

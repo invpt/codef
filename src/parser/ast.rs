@@ -1,4 +1,4 @@
-use crate::tokenizer::{Intern, Span};
+use crate::{tokenizer::{Span}, string_storage::Intern};
 
 #[derive(Debug)]
 pub struct Scope<'s> {
@@ -97,6 +97,7 @@ pub enum Literal<'s> {
     Float(f64),
     Integer(u64),
     String(Intern<'s>),
+    Boolean(bool),
 }
 
 #[derive(Debug)]

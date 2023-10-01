@@ -1,7 +1,7 @@
 use crate::{
     char_reader::CharReader,
     errors::ErrorStream,
-    tokenizer::{Span, Token, TokenKind, TokenizationError, Tokens},
+    tokenizer::{Span, Token, TokenKind, TokenizationError, Tokens}, string_storage::StringInterner,
 };
 
 mod ast;
@@ -33,20 +33,22 @@ impl<'s> From<TokenizationError> for ParseError<'s> {
 
 type Result<'s, T> = std::result::Result<T, ParseError<'s>>;
 
-pub fn parse<'s>(
-    tokens: Tokens<'s, impl CharReader>,
+pub fn parse<'i, 's>(
+    tokens: Tokens<'i, 's, impl CharReader>,
     errors: &'s ErrorStream<'s>,
-) -> Result<'s, Expr<'s>> {
-    Parser { tokens, errors }.parse()
+) -> Result<'s, (&'i mut StringInterner<'s>, Expr<'s>)> {
+    let mut parser = Parser { tokens, errors };
+    let res = parser.parse()?;
+    Ok((parser.tokens.strings, res))    
 }
 
-struct Parser<'s, R> {
-    tokens: Tokens<'s, R>,
+struct Parser<'i, 's, R> {
+    tokens: Tokens<'i, 's, R>,
     errors: &'s ErrorStream<'s>,
 }
 
-impl<'s, R: CharReader> Parser<'s, R> {
-    fn parse(mut self) -> Result<'s, Expr<'s>> {
+impl<'i, 's, R: CharReader> Parser<'i, 's, R> {
+    fn parse(&mut self) -> Result<'s, Expr<'s>> {
         self.scope(bpred!())
     }
 
@@ -58,6 +60,7 @@ impl<'s, R: CharReader> Parser<'s, R> {
         let mut first = true;
         let mut discard = false;
         while self.tokens.peek()?.is_some() && !self.has_peek(&end_pred)? {
+            let mut stop = false;
             let span = if self.has_peek(bpred!(TokenKind::Def))? {
                 let def = self.def()?;
                 let span = def.decl_span;
@@ -74,7 +77,7 @@ impl<'s, R: CharReader> Parser<'s, R> {
                 let case = self.termcase()?;
                 let span = case.span;
                 exprs.push(case);
-                discard = true;
+                discard = false;
                 span
             } else if self.has_peek(bpred!(TokenKind::For))? {
                 let for_ = self.termfor()?;
@@ -88,6 +91,7 @@ impl<'s, R: CharReader> Parser<'s, R> {
                 exprs.push(expr);
                 let semi = self.eat(tpred!(TokenKind::Semicolon))?;
                 discard = semi.is_some();
+                stop = semi.is_none();
                 Span {
                     start: span.start,
                     end: semi.map(|s| s.span.end).unwrap_or(span.end),
@@ -99,7 +103,7 @@ impl<'s, R: CharReader> Parser<'s, R> {
             end = span.end;
             first = false;
 
-            if !discard {
+            if stop {
                 break;
             }
         }

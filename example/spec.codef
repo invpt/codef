@@ -1,30 +1,33 @@
-type String ();
-type Int ();
-
 // Simple AST, parser, and tree-walking interpreter for single-arg functions.
-type Expr \Add;
-def parse(val src :: String) -> Expr { /* ... */ }
+type Expr
+    \Add(Expr, Expr)
+    \Mul(Expr, Expr)
+    \Neg(Expr)
+    \Val(Int)
+    \Arg;
+def parse(val src :: String) -> Expr => Expr\Add(Expr\Val 1, Expr\Val 1);
 def eval(val expr :: Expr, val arg :: Int) -> Int {
     case expr = Expr\Add(val a, val b) {
-        eval(a) + eval(b)
+        eval(a, arg) + eval(b, arg)
     } else expr = Expr\Mul(val a, val b) {
-        eval(a) * eval(b)
+        eval(a, arg) * eval(b, arg)
     } else expr = Expr\Neg(val a) {
-        -eval(a)
-    }  else expr = Expr\Const(val i) {
+        -eval(a, arg)
+    } else expr = Expr\Val(val i) {
         i
     } else expr = Expr\Arg {
         arg
+    } else {
+        // compiler doesn't know about exhaustiveness right now
+        0
     }
 }
 
 // The dollar sign means "do the specialization with these arguments when the function is called"
-def compile(val expr :: Expr) -> (Int => Int) $=> (val arg :: Int) -> Int => eval(expr, arg);
+def compile(val expr :: Expr) -> (Int => Int) $=> (val arg :: Int) => eval(expr, arg);
 
-def readline() => ();
-def print() => ();
 def main() {
-    val src = readline();
+    val src = input();
     val expr = parse(src);
     val calc = compile(expr);
 
@@ -35,5 +38,5 @@ def main() {
         set total = total + calc(i);
     }
 
-    print("Total from zero to a billion: "  + total );
+    println(itoa(total));
 }

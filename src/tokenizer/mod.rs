@@ -2,12 +2,8 @@ use std::{hash::Hash, io};
 
 use crate::{
     char_reader::{CharReader, CharReaderSaver},
-    string_storage::StringStorage,
+    string_storage::{StringStorage, StringInterner, Intern},
 };
-
-mod string_interner;
-
-use string_interner::StringInterner;
 
 #[derive(Debug)]
 pub struct TokenizationError {
@@ -33,9 +29,9 @@ impl From<io::Error> for TokenizationError {
 
 type Result<T> = std::result::Result<T, TokenizationError>;
 
-pub struct Tokens<'s, R> {
+pub struct Tokens<'i, 's, R> {
     chars: R,
-    strings: StringInterner<'s>,
+    pub(crate) strings: &'i mut StringInterner<'s>,
     peek: Option<Token<'s>>,
 }
 
@@ -107,28 +103,11 @@ pub enum TokenKind<'s> {
     String(Intern<'s>),
 }
 
-#[derive(Debug, Clone, Copy)]
-pub struct Intern<'s>(pub &'s str);
-
-impl<'s> PartialEq for Intern<'s> {
-    fn eq(&self, other: &Self) -> bool {
-        std::ptr::eq(self.0, other.0)
-    }
-}
-
-impl<'s> Eq for Intern<'s> {}
-
-impl<'s> Hash for Intern<'s> {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        state.write_usize(self.0 as *const str as *const u8 as usize)
-    }
-}
-
-impl<'s, R: CharReader> Tokens<'s, R> {
-    pub fn of(chars: R, string_storage: &'s StringStorage) -> Tokens<'s, R> {
+impl<'i, 's, R: CharReader> Tokens<'i, 's, R> {
+    pub fn of(chars: R, interner: &'s mut StringInterner<'s>) -> Tokens<'i, 's, R> {
         Tokens {
             chars,
-            strings: StringInterner::new(string_storage),
+            strings: interner,
             peek: None,
         }
     }

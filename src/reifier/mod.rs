@@ -5,11 +5,12 @@ use std::num::NonZeroUsize;
 mod rst;
 mod scoper;
 pub use rst::*;
+use rustc_hash::FxHashMap;
 
 use crate::{
     parser,
-    string_storage::StringStorage,
-    tokenizer::{Intern, Span},
+    string_storage::{Intern, StringInterner, StringStorage},
+    tokenizer::Span,
 };
 
 use self::scoper::Scoper;
@@ -30,23 +31,29 @@ pub enum ReifyErrorKind<'s> {
     InvalidType,
     InvalidVariant,
     InvalidPattern,
+    TypeAssertionConflict,
 }
 
 type Result<'s, T> = std::result::Result<T, ReifyError<'s>>;
 
-pub fn reify<'s>(storage: &'s StringStorage, expr: &parser::Expr<'s>) -> Result<'s, Module<'s>> {
+pub fn reify<'s>(
+    interner: &'s mut StringInterner<'s>,
+    expr: &parser::Expr<'s>,
+) -> Result<'s, Module<'s>> {
     Reifier {
+        interner,
         scoper: Scoper::default(),
-        sym_counter: NonZeroUsize::new(1).unwrap(),
         module: Module::default(),
+        builtin_types: FxHashMap::default(),
     }
     .reify(expr)
 }
 
 struct Reifier<'s> {
-    sym_counter: NonZeroUsize,
+    interner: &'s mut StringInterner<'s>,
     scoper: Scoper<'s>,
     module: Module<'s>,
+    builtin_types: FxHashMap<Symbol, Type<'s>>,
 }
 
 impl<'s> Reifier<'s> {
@@ -69,14 +76,41 @@ impl<'s> Reifier<'s> {
             });
         }
 
+        self.scoper.push();
+        // Define builtins
+        self.define_builtins();
+
         self.scope(scope)?;
+        self.scoper.pop();
 
         Ok(self.module)
+    }
+
+    fn define_builtins(&mut self) {
+        self.define_builtin_type("Int", TypeKind::Primitive(PrimitiveType::Integer));
+        self.define_builtin_type("Float", TypeKind::Primitive(PrimitiveType::Float));
+        self.define_builtin_type("String", TypeKind::Primitive(PrimitiveType::String));
+        self.define_builtin_type("Bool", TypeKind::Primitive(PrimitiveType::Boolean));
+        self.define_builtin_func("print", Some(TypeKind::Primitive(PrimitiveType::String)), TypeKind::Tuple(Box::new([])));
+        self.define_builtin_func("println", Some(TypeKind::Primitive(PrimitiveType::String)), TypeKind::Tuple(Box::new([])));
+        self.define_builtin_func("input", Some(TypeKind::Tuple(Box::new([]))), TypeKind::Primitive(PrimitiveType::String));
+        self.define_builtin_func("itoa", Some(TypeKind::Primitive(PrimitiveType::Integer)), TypeKind::Primitive(PrimitiveType::String));
+    }
+
+    fn define_builtin_type(&mut self, name: &str, kind: TypeKind<'s>) {
+        let name = self.interner.intern(name.into());
+        self.builtin_types.insert(self.scoper.new_symbol(name), Type { span: None, kind });
+    }
+
+    fn define_builtin_func(&mut self, name: &str, arg: Option<TypeKind<'s>>, ret: TypeKind<'s>) {
+        let name = self.interner.intern(name.into());
+        self.module.builtin_funcs.insert(self.scoper.new_symbol(name), (arg.map(Type::inferred), Type::inferred(ret)));
     }
 
     fn scope(&mut self, scope: &parser::Scope<'s>) -> Result<'s, Scope<'s>> {
         self.scoper.push();
 
+        // TODO: traverse in topological order
         for def in &*scope.defs {
             match &def.value.kind {
                 parser::ExprKind::Abstract {
@@ -84,7 +118,14 @@ impl<'s> Reifier<'s> {
                     spec,
                     ty,
                     body,
-                } => self.def(def.decl_span, def.name, *spec, arg.as_deref(), &*body, ty.as_deref())?,
+                } => self.def(
+                    def.decl_span,
+                    def.name,
+                    *spec,
+                    arg.as_deref(),
+                    &*body,
+                    ty.as_deref(),
+                )?,
                 _ => self.typedef(def.decl_span, def.name, &def.value)?,
             }
         }
@@ -130,12 +171,30 @@ impl<'s> Reifier<'s> {
                 },
             }
         } else {
-            self.expr(body)?
+            let mut body = self.expr(body)?;
+            if let Some(ty) = ty {
+                let ty_span = ty.span;
+                let ty = self.type_(&ty)?;
+                if let Some(bodyty) = body.ty {
+                    if bodyty.is_subtype(&ty) {
+                        body.ty = Some(ty)
+                    } else {
+                        return Err(ReifyError {
+                            kind: ReifyErrorKind::TypeAssertionConflict,
+                            span: Some(ty_span),
+                        });
+                    }
+                } else {
+                    body.ty = Some(ty)
+                }
+            }
+
+            body
         };
 
         self.module.defs.insert(
             sym,
-            Proc {
+            Def {
                 decl_span: init_span,
                 spec,
                 name,
@@ -147,12 +206,22 @@ impl<'s> Reifier<'s> {
         Ok(())
     }
 
-    fn typedef(&mut self, init_span: Span, name: Intern<'s>, value: &parser::Expr<'s>) -> Result<'s, ()> {
+    fn typedef(
+        &mut self,
+        init_span: Span,
+        name: Intern<'s>,
+        value: &parser::Expr<'s>,
+    ) -> Result<'s, ()> {
         let sym = self.scoper.new_symbol(name);
         let type_ = self.type_(value)?;
-        self.module
-            .types
-            .insert(sym, TypeDef { decl_span: init_span, name, inner: type_ });
+        self.module.typedefs.insert(
+            sym,
+            TypeDef {
+                decl_span: init_span,
+                name,
+                inner: type_,
+            },
+        );
         Ok(())
     }
 
@@ -175,18 +244,41 @@ impl<'s> Reifier<'s> {
                 new_items.into_boxed_slice()
             }),
             parser::ExprKind::Apply(a, b) => {
-                TypeKind::Apply(Box::new(self.type_(a)?), Box::new(self.type_(b)?))
+                let parser::ExprKind::Name(name) = &a.kind else {
+                    return Err(ReifyError { kind: ReifyErrorKind::InvalidType, span: Some(expr.span) })
+                };
+                let Some(sym) = self.scoper.lookup(*name) else {
+                    return Err(ReifyError { kind: ReifyErrorKind::UndefinedSymbol(*name), span: Some(a.span) })
+                };
+
+                let arg_type = self.type_(b)?;
+                let Some(typedef) = self.module.typedefs.get(&sym) else {
+                    return Err(ReifyError { kind: ReifyErrorKind::InvalidType, span: Some(expr.span) })
+                };
+
+                if !arg_type.is_subtype(&typedef.inner) {
+                    return Err(ReifyError {
+                        kind: ReifyErrorKind::InvalidType,
+                        span: Some(expr.span),
+                    });
+                }
+
+                TypeKind::Symbol(sym)
             }
-            parser::ExprKind::Name(name) => TypeKind::Symbol({
+            parser::ExprKind::Name(name) => {
                 if let Some(symbol) = self.scoper.lookup(*name) {
-                    symbol
+                    if let Some(builtin) = self.builtin_types.get(&symbol) {
+                        builtin.kind.clone()
+                    } else {
+                        TypeKind::Symbol(symbol)
+                    }
                 } else {
                     return Err(ReifyError {
                         kind: ReifyErrorKind::UndefinedSymbol(*name),
                         span: Some(expr.span),
                     });
                 }
-            }),
+            }
             parser::ExprKind::Variant(items) => TypeKind::Variant({
                 let mut new_items = Vec::with_capacity(items.len());
                 for item in &**items {
@@ -265,12 +357,14 @@ impl<'s> Reifier<'s> {
                     },
                     SolveMarker::Val | SolveMarker::Var => {
                         let sym = self.scoper.new_symbol(name);
-                        self.module.locals.insert(sym, Local {
-                            decl_span: expr.span,
-                            name,
-                            mutable: marker == SolveMarker::Var,
-                            ty: None,
-                        });
+                        self.module.locals.insert(
+                            sym,
+                            Local {
+                                decl_span: expr.span,
+                                name,
+                                mutable: marker == SolveMarker::Var,
+                            },
+                        );
                         sym
                     }
                 },
@@ -309,47 +403,73 @@ impl<'s> Reifier<'s> {
                 arg,
                 body,
                 ty,
-            } => {
-                if let Some(ty) = ty {
-                    type_ = Some(self.type_(ty)?);
-                }
+            } => ExprKind::Abstract {
+                spec: *spec,
+                arg: if let Some(arg) = arg {
+                    Some(self.pattern(arg)?)
+                } else {
+                    None
+                },
+                body: Box::new({
+                    let mut body = self.expr(body)?;
+                    if let Some(ty) = ty {
+                        let ty_span = ty.span;
+                        let ty = self.type_(&ty)?;
+                        if let Some(bodyty) = body.ty {
+                            if bodyty.is_subtype(&ty) {
+                                body.ty = Some(ty)
+                            } else {
+                                return Err(ReifyError {
+                                    kind: ReifyErrorKind::TypeAssertionConflict,
+                                    span: Some(ty_span),
+                                });
+                            }
+                        } else {
+                            body.ty = Some(ty)
+                        }
+                    }
 
-                ExprKind::Abstract {
-                    spec: *spec,
-                    arg: if let Some(arg) = arg {
-                        Some(self.pattern(arg)?)
-                    } else {
-                        None
-                    },
-                    body: Box::new(self.expr(body)?),
-                }
-            }
+                    body
+                }),
+            },
             parser::ExprKind::For {
                 init,
                 cond,
                 afterthought,
                 body,
-            } => ExprKind::For {
-                init: if let Some(init) = init {
-                    Some(Box::new(self.expr(init)?))
-                } else {
-                    None
-                },
-                cond: Box::new(self.expr(cond)?),
-                afterthought: if let Some(afterthought) = afterthought {
-                    Some(Box::new(self.expr(afterthought)?))
-                } else {
-                    None
-                },
-                body: Box::new(self.expr(body)?),
-            },
+            } => {
+                self.scoper.push();
+                let for_ = ExprKind::For {
+                    init: if let Some(init) = init {
+                        Some(Box::new(self.expr(init)?))
+                    } else {
+                        None
+                    },
+                    cond: Box::new(self.expr(cond)?),
+                    afterthought: if let Some(afterthought) = afterthought {
+                        Some(Box::new(self.expr(afterthought)?))
+                    } else {
+                        None
+                    },
+                    body: Box::new(self.expr(body)?),
+                };
+                self.scoper.pop();
+                for_
+            }
             parser::ExprKind::Case {
                 cond,
                 on_true,
                 on_false,
             } => ExprKind::Case {
-                cond: Box::new(self.expr(cond)?),
-                on_true: Box::new(self.expr(on_true)?),
+                cond: Box::new({
+                    self.scoper.push();
+                    self.expr(cond)?
+                }),
+                on_true: Box::new({
+                    let on_true = self.expr(on_true)?;
+                    self.scoper.pop();
+                    on_true
+                }),
                 on_false: if let Some(on_false) = on_false {
                     Some(Box::new(self.expr(on_false)?))
                 } else {
@@ -451,7 +571,7 @@ impl<'s> Reifier<'s> {
 
                 false
             }
-            parser::ExprKind::Variant(items) =>{
+            parser::ExprKind::Variant(items) => {
                 for item in items.iter() {
                     if let Some(value) = &item.value {
                         if Self::has_solve(value)? {

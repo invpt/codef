@@ -1,4 +1,52 @@
-use std::cell::RefCell;
+use std::{cell::RefCell, hash::Hash};
+
+use rustc_hash::FxHashSet;
+
+#[derive(Debug, Clone, Copy)]
+pub struct Intern<'s>(pub &'s str);
+
+impl<'s> PartialEq for Intern<'s> {
+    fn eq(&self, other: &Self) -> bool {
+        std::ptr::eq(self.0, other.0)
+    }
+}
+
+impl<'s> Eq for Intern<'s> {}
+
+impl<'s> Hash for Intern<'s> {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        state.write_usize(self.0 as *const str as *const u8 as usize)
+    }
+}
+
+// Interns strings so that each unique string interned by a given instance of
+/// this struct has a single unique address in memory.
+pub struct StringInterner<'s> {
+    storage: &'s StringStorage,
+    strings: FxHashSet<&'s str>,
+}
+
+impl<'s> StringInterner<'s> {
+    /// Creates a new string interner.
+    pub fn new(storage: &'s StringStorage) -> StringInterner<'s> {
+        StringInterner {
+            storage,
+            strings: FxHashSet::default(),
+        }
+    }
+
+    /// Takes ownership of the given string and interns it.
+    pub fn intern(&mut self, s: String) -> Intern<'s> {
+        if let Some(s) = self.strings.get(&*s) {
+            Intern(s)
+        } else {
+            let stored = self.storage.store(s.into());
+            self.strings.insert(stored);
+            Intern(stored)
+        }
+    }
+}
+
 
 /// Storage for strings interned by a [StringInterner]. StringInterners just
 /// need a reference to one of these so that they can keep track of all the

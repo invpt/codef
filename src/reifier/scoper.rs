@@ -2,7 +2,7 @@ use std::num::NonZeroUsize;
 
 use rustc_hash::FxHashMap;
 
-use crate::tokenizer::Intern;
+use crate::string_storage::Intern;
 
 use super::Symbol;
 

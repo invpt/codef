@@ -2,16 +2,17 @@ use std::num::NonZeroUsize;
 
 use rustc_hash::FxHashMap;
 
-use crate::tokenizer::{Intern, Span};
+use crate::{tokenizer::{Span}, string_storage::Intern};
 
 pub use crate::parser::{BinOp, UnOp, Literal, SolveMarker};
 
 #[derive(Debug, Default)]
 pub struct Module<'s> {
     pub main: Option<Symbol>,
-    pub defs: FxHashMap<Symbol, Proc<'s>>,
-    pub types: FxHashMap<Symbol, TypeDef<'s>>,
+    pub defs: FxHashMap<Symbol, Def<'s>>,
+    pub typedefs: FxHashMap<Symbol, TypeDef<'s>>,
     pub locals: FxHashMap<Symbol, Local<'s>>,
+    pub builtin_funcs: FxHashMap<Symbol, (Option<Type<'s>>, Type<'s>)>,
 }
 
 #[derive(Debug)]
@@ -21,22 +22,132 @@ pub struct TypeDef<'s> {
     pub inner: Type<'s>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Type<'s> {
     pub kind: TypeKind<'s>,
     pub span: Option<Span>,
 }
 
-#[derive(Debug)]
+impl<'s> Type<'s> {
+    pub fn inferred(kind: TypeKind<'s>) -> Type<'s> {
+        Type { kind, span: None }
+    }
+
+    /// Tries to widen with the other type.
+    pub fn widen(&self, other: &Type<'s>) -> Option<Type<'s>> {
+        if let (TypeKind::Variant(a), TypeKind::Variant(b)) = (&self.kind, &other.kind) {
+            // a, b must be nonoverlapping in names.
+            // if so, we can just concat their variants
+            let mut items = Vec::with_capacity(a.len() + b.len());
+            for a in a.iter() {
+                let mut added = false;
+                for b in b.iter() {
+                    if a.name == b.name {
+                        // then their values must be able to widen too...
+                        if let (Some(ain), Some(bin)) = (&a.inner, &b.inner) {
+                            if let Some(win) = ain.widen(bin) {
+                                items.push(VariantItemType {
+                                    name: a.name,
+                                    inner: Some(win),
+                                });
+                                added = true;
+                            } else {
+                                return None
+                            }
+                        } else {
+                            return None
+                        }
+                    } else {
+                        items.push(b.clone())
+                    }
+                }
+
+                if !added {
+                    items.push(a.clone())
+                }
+            }
+
+            None
+        } else if self.is_subtype(other) {
+            Some(other.clone())
+        } else if other.is_subtype(self) {
+            Some(self.clone())
+        } else {
+            None
+        }
+    }
+
+    pub fn is_subtype(&self, other: &Type<'s>) -> bool {
+        match (&self.kind, &other.kind) {
+            (TypeKind::Function(aarg, aret), TypeKind::Function(barg, bret)) => {
+                if let (Some(aarg), Some(barg)) = (aarg, barg) {
+                    barg.is_subtype(aarg) && aret.is_subtype(bret)
+                } else if let (None, None) = (aarg, barg) {
+                    aret.is_subtype(bret)
+                } else {
+                    false
+                }
+            }
+            (TypeKind::Variant(a), TypeKind::Variant(b)) => {
+                for a in a.iter() {
+                    let mut found = false;
+                    for b in b.iter() {
+                        if a.name != b.name {
+                            continue
+                        }
+                        if let (Some(ai), Some(bi)) = (&a.inner, &b.inner) {
+                            found = ai.is_subtype(bi)
+                        } else if let (None, None) = (&a.inner, &b.inner) {
+                            found = true
+                        }
+                    }
+                    if !found {
+                        return false
+                    }
+                }
+
+                true
+            }
+            (TypeKind::Tuple(a), TypeKind::Tuple(b)) => {
+                if a.len() != b.len() {
+                    return false
+                }
+
+                for (a, b) in a.iter().zip(b.iter()) {
+                    if !a.is_subtype(b) {
+                        return false
+                    }
+                }
+
+                true
+            }
+            (TypeKind::Constructor(a), TypeKind::Constructor(b)) => a == b,
+            (TypeKind::Symbol(a), TypeKind::Symbol(b)) => a == b,
+            (TypeKind::Primitive(a), TypeKind::Primitive(b)) => a == b,
+            _ => false,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
 pub enum TypeKind<'s> {
-    Apply(Box<Type<'s>>, Box<Type<'s>>),
     Function(Option<Box<Type<'s>>>, Box<Type<'s>>),
     Variant(Box<[VariantItemType<'s>]>),
     Tuple(Box<[Type<'s>]>),
+    Constructor(Symbol),
     Symbol(Symbol),
+    Primitive(PrimitiveType),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PrimitiveType {
+    Float,
+    Integer,
+    String,
+    Boolean,
+}
+
+#[derive(Debug, Clone)]
 pub struct VariantItemType<'s> {
     pub name: Intern<'s>,
     pub inner: Option<Type<'s>>,
@@ -47,11 +158,10 @@ pub struct Local<'s> {
     pub decl_span: Span,
     pub name: Intern<'s>,
     pub mutable: bool,
-    pub ty: Option<Expr<'s>>
 }
 
 #[derive(Debug)]
-pub struct Proc<'s> {
+pub struct Def<'s> {
     pub decl_span: Span,
     pub name: Intern<'s>,
     pub spec: bool,
@@ -103,8 +213,8 @@ pub enum ExprKind<'s> {
     Unary(UnOp, Box<Expr<'s>>),
     Apply(Box<Expr<'s>>, Box<Expr<'s>>),
     Variant(Intern<'s>, Option<Box<Expr<'s>>>),
-    Literal(Literal<'s>),
     Symbol(Symbol),
+    Literal(Literal<'s>),
 }
 
 #[derive(Debug)]
