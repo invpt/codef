@@ -22,6 +22,8 @@ fn main() {
     let errs = errors::ErrorStream::new();
     let tree = parser::parse(toks, &errs).unwrap();
     println!("{:#?}", tree);
+    let reified = reifier::reify(&storage, &tree).unwrap();
+    println!("\n\n\n\nREIFIED:\n{:#?}", reified);
     //println!(
      //   "AST size: {}KiB (Expr {} bytes)",
      //   ast_size(&tree) / 1024,

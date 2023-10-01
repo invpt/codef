@@ -16,6 +16,7 @@ pub struct Module<'s> {
 
 #[derive(Debug)]
 pub struct TypeDef<'s> {
+    pub decl_span: Span,
     pub name: Intern<'s>,
     pub inner: Type<'s>,
 }
@@ -28,7 +29,8 @@ pub struct Type<'s> {
 
 #[derive(Debug)]
 pub enum TypeKind<'s> {
-    Abstract(Option<Box<Type<'s>>>, Box<Type<'s>>),
+    Apply(Box<Type<'s>>, Box<Type<'s>>),
+    Function(Option<Box<Type<'s>>>, Box<Type<'s>>),
     Variant(Box<[VariantItemType<'s>]>),
     Tuple(Box<[Type<'s>]>),
     Symbol(Symbol),
@@ -36,19 +38,21 @@ pub enum TypeKind<'s> {
 
 #[derive(Debug)]
 pub struct VariantItemType<'s> {
-    name: Intern<'s>,
-    inner: Type<'s>,
+    pub name: Intern<'s>,
+    pub inner: Option<Type<'s>>,
 }
 
 #[derive(Debug)]
 pub struct Local<'s> {
-    name: Intern<'s>,
-    mutable: bool,
-    ty: Option<Expr<'s>>
+    pub decl_span: Span,
+    pub name: Intern<'s>,
+    pub mutable: bool,
+    pub ty: Option<Expr<'s>>
 }
 
 #[derive(Debug)]
 pub struct Proc<'s> {
+    pub decl_span: Span,
     pub name: Intern<'s>,
     pub spec: bool,
     pub arg: Option<Pattern<'s>>,
@@ -98,19 +102,30 @@ pub enum ExprKind<'s> {
     Binary(BinOp, Box<Expr<'s>>, Box<Expr<'s>>),
     Unary(UnOp, Box<Expr<'s>>),
     Apply(Box<Expr<'s>>, Box<Expr<'s>>),
+    Variant(Intern<'s>, Option<Box<Expr<'s>>>),
     Literal(Literal<'s>),
     Symbol(Symbol),
 }
 
 #[derive(Debug)]
 pub struct Pattern<'s> {
-    kind: PatternKind<'s>,
-    span: Span,
+    pub kind: PatternKind<'s>,
+    pub span: Span,
+    pub ty: Option<Type<'s>>,
 }
 
 #[derive(Debug)]
 pub enum PatternKind<'s> {
-    Variant(Intern<'s>, Box<Pattern<'s>>),
+    Apply(Box<Pattern<'s>>, Box<Pattern<'s>>),
+    Variant(Intern<'s>, Option<Box<Pattern<'s>>>),
     Tuple(Box<[Pattern<'s>]>),
     Solve(SolveMarker, Symbol),
+    Symbol(Symbol),
+}
+
+#[derive(Debug)]
+pub struct VariantItem<'s> {
+    pub name: Intern<'s>,
+    pub value: Option<Box<Expr<'s>>>,
+    pub span: Span,
 }

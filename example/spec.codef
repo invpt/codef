@@ -1,5 +1,5 @@
-type String "TODO";
-type Int "TODO";
+type String ();
+type Int ();
 
 // Simple AST, parser, and tree-walking interpreter for single-arg functions.
 type Expr \Add;
@@ -21,6 +21,8 @@ def eval(val expr :: Expr, val arg :: Int) -> Int {
 // The dollar sign means "do the specialization with these arguments when the function is called"
 def compile(val expr :: Expr) -> (Int => Int) $=> (val arg :: Int) -> Int => eval(expr, arg);
 
+def readline() => ();
+def print() => ();
 def main() {
     val src = readline();
     val expr = parse(src);

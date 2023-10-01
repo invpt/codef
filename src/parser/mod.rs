@@ -1,7 +1,7 @@
 use crate::{
     char_reader::CharReader,
     errors::ErrorStream,
-    tokenizer::{Intern, Span, Token, TokenKind, TokenizationError, Tokens},
+    tokenizer::{Span, Token, TokenKind, TokenizationError, Tokens},
 };
 
 mod ast;
@@ -60,13 +60,13 @@ impl<'s, R: CharReader> Parser<'s, R> {
         while self.tokens.peek()?.is_some() && !self.has_peek(&end_pred)? {
             let span = if self.has_peek(bpred!(TokenKind::Def))? {
                 let def = self.def()?;
-                let span = def.span;
+                let span = def.decl_span;
                 defs.push(def);
                 discard = true;
                 span
             } else if self.has_peek(bpred!(TokenKind::Type))? {
                 let def = self.typedef()?;
-                let span = def.span;
+                let span = def.decl_span;
                 defs.push(def);
                 discard = true;
                 span
@@ -127,13 +127,13 @@ impl<'s, R: CharReader> Parser<'s, R> {
 
     fn def(&mut self) -> Result<'s, Def<'s>> {
         let kw_tok = self.require(tpred!(TokenKind::Def))?;
-        let name = self.require(vpred!(TokenKind::Name(n) => n))?;
+        let (name_span, name) = self.require(vpred!(:t: TokenKind::Name(n) => (t.span, n)))?;
         let abs = self.termexpr()?;
 
         Ok(Def {
-            span: Span {
+            decl_span: Span {
                 start: kw_tok.span.start,
-                end: abs.span.end,
+                end: name_span.end,
             },
             name,
             value: Box::new(abs),
@@ -142,13 +142,13 @@ impl<'s, R: CharReader> Parser<'s, R> {
 
     fn typedef(&mut self) -> Result<'s, Def<'s>> {
         let kw_tok = self.require(tpred!(TokenKind::Type))?;
-        let name = self.require(vpred!(TokenKind::Name(n) => n))?;
+        let (name_span, name) = self.require(vpred!(:t: TokenKind::Name(n) => (t.span, n)))?;
         let value = self.termexpr()?;
 
         Ok(Def {
-            span: Span {
+            decl_span: Span {
                 start: kw_tok.span.start,
-                end: value.span.end,
+                end: name_span.end,
             },
             name,
             value: Box::new(value),
@@ -506,16 +506,6 @@ impl<'s, R: CharReader> Parser<'s, R> {
             :t: TokenKind::Set => (t.span, SolveMarker::Set),
         })? {
             let (name_span, name) = self.require(vpred!(:t: TokenKind::Name(n) => (t.span, n)))?;
-            /*let symbol = match marker {
-                Solve::Set => self.scoper.lookup(name),
-                Solve::Val | Solve::Var => Some(self.scoper.new_symbol(name)),
-            };
-            let Some(symbol) = symbol else {
-                return Err(ParseError {
-                    kind: ParseErrorKind::UndefinedSymbol(name),
-                    span: Some(name_span),
-                })
-            };*/
 
             Ok(Expr {
                 kind: ExprKind::Solve(marker, name),
@@ -530,7 +520,7 @@ impl<'s, R: CharReader> Parser<'s, R> {
     }
 
     fn suffix(&mut self) -> Result<'s, Expr<'s>> {
-        let Some(mut a) = self.maybe_atom()? else {
+        let Some(mut a) = self.maybe_atom(true)? else {
             return Err(ParseError {
                 kind: ParseErrorKind::Unexpected(self.tokens.peek()?.cloned()),
                 span: None,
@@ -538,7 +528,7 @@ impl<'s, R: CharReader> Parser<'s, R> {
         };
 
         loop {
-            if let Some(arg) = self.maybe_atom()? {
+            if let Some(arg) = self.maybe_atom(true)? {
                 a = Expr {
                     span: Span {
                         start: a.span.start,
@@ -554,7 +544,7 @@ impl<'s, R: CharReader> Parser<'s, R> {
         Ok(a)
     }
 
-    fn maybe_atom(&mut self) -> Result<'s, Option<Expr<'s>>> {
+    fn maybe_atom(&mut self, allow_variants: bool) -> Result<'s, Option<Expr<'s>>> {
         if let Some(open) = self.eat(tpred!(TokenKind::OpenParen))? {
             let scope = self.scope(bpred!(TokenKind::CloseParen))?;
             let close = self.require(tpred!(TokenKind::CloseParen))?;
@@ -565,17 +555,8 @@ impl<'s, R: CharReader> Parser<'s, R> {
                 },
                 kind: scope.kind,
             }))
-        } else if self.has_peek(bpred!(TokenKind::Backslash))? {
-            let start = self.require(vpred!(:t: TokenKind::Backslash => t.span))?;
-            let (end, name) = self.require(vpred!(:t: TokenKind::Name(n) => (t.span, n)))?;
-
-            Ok(Some(Expr {
-                span: Span {
-                    start: start.start,
-                    end: end.end,
-                },
-                kind: ExprKind::Literal(Literal::Variant(name)),
-            }))
+        } else if allow_variants && self.has_peek(bpred!(TokenKind::Backslash))? {
+            Ok(Some(self.variant()?))
         } else if let Some((span, kind)) = self.eat(vpred! {
             :t: TokenKind::Float(f) => (t.span, ExprKind::Literal(Literal::Float(f))),
             :t: TokenKind::Integer(i) => (t.span, ExprKind::Literal(Literal::Integer(i))),
@@ -586,6 +567,30 @@ impl<'s, R: CharReader> Parser<'s, R> {
         } else {
             Ok(None)
         }
+    }
+
+    fn variant(&mut self) -> Result<'s, Expr<'s>> {
+        let mut items = Vec::with_capacity(1);
+        while let Some(slash) = self.eat(tpred!(TokenKind::Backslash))? {
+            let start = slash.span.start;
+            let (name_span, name) = self.require(vpred!(:t: TokenKind::Name(n) => (t.span, n)))?;
+            let value = self.maybe_atom(false)?;
+            let end = value.as_ref().map(|v| v.span.end).unwrap_or(name_span.end);
+
+            items.push(VariantItem {
+                name,
+                value: value.map(Box::new),
+                span: Span { start, end },
+            })
+        }
+
+        Ok(Expr {
+            span: Span {
+                start: items.first().unwrap().span.start,
+                end: items.last().unwrap().span.end,
+            },
+            kind: ExprKind::Variant(items.into()),
+        })
     }
 
     fn bin_op(

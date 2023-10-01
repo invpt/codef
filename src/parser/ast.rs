@@ -9,9 +9,9 @@ pub struct Scope<'s> {
 
 #[derive(Debug)]
 pub struct Def<'s> {
+    pub decl_span: Span,
     pub name: Intern<'s>,
     pub value: Box<Expr<'s>>,
-    pub span: Span,
 }
 
 #[derive(Debug)]
@@ -51,11 +51,12 @@ pub enum ExprKind<'s> {
     Unary(UnOp, Box<Expr<'s>>),
     Apply(Box<Expr<'s>>, Box<Expr<'s>>),
     Solve(SolveMarker, Intern<'s>),
+    Variant(Box<[VariantItem<'s>]>),
     Name(Intern<'s>),
     Literal(Literal<'s>),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub enum BinOp {
     Or,
     And,
@@ -78,23 +79,29 @@ pub enum BinOp {
     Mod,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UnOp {
     Not,
     Neg,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SolveMarker {
     Val,
     Var,
     Set,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub enum Literal<'s> {
     Float(f64),
     Integer(u64),
-    Variant(Intern<'s>),
     String(Intern<'s>),
+}
+
+#[derive(Debug)]
+pub struct VariantItem<'s> {
+    pub name: Intern<'s>,
+    pub value: Option<Box<Expr<'s>>>,
+    pub span: Span,
 }

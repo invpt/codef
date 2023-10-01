@@ -6,15 +6,7 @@ pub fn mergepreds<'s, T>(
     a: impl Fn(&Token<'s>) -> Option<T>,
     b: impl Fn(&Token<'s>) -> Option<T>,
 ) -> impl Fn(&Token<'s>) -> Option<T> {
-    move |t| {
-        if let Some(v) = a(t) {
-            Some(v)
-        } else if let Some(v) = b(t) {
-            Some(v)
-        } else {
-            None
-        }
-    }
+    move |t| a(t).or_else(|| b(t))
 }
 
 pub fn to_bpred<'s, T>(
