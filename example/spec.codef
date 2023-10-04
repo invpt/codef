@@ -15,11 +15,8 @@ def eval(val expr :: Expr, val arg :: Int) -> Int {
         -eval(a, arg)
     } else expr = Expr\Val(val i) {
         i
-    } else expr = Expr\Arg {
+    } else /*expr = Expr\Arg*/ { // (compiler doesn't know about exhaustiveness right now)
         arg
-    } else {
-        // compiler doesn't know about exhaustiveness right now
-        0
     }
 }
 

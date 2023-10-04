@@ -1,10 +1,10 @@
-use std::num::NonZeroUsize;
+use std::{hash::Hash, num::NonZeroUsize};
 
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 
-use crate::{tokenizer::{Span}, string_storage::Intern};
+use crate::{string_storage::Intern, tokenizer::Span};
 
-pub use crate::parser::{BinOp, UnOp, Literal, SolveMarker};
+pub use crate::parser::{BinOp, Literal, SolveMarker, UnOp};
 
 #[derive(Debug, Default)]
 pub struct Module<'s> {
@@ -22,20 +22,24 @@ pub struct TypeDef<'s> {
     pub inner: Type<'s>,
 }
 
-#[derive(Debug, Clone)]
-pub struct Type<'s> {
-    pub kind: TypeKind<'s>,
-    pub span: Option<Span>,
+impl<'s> Type<'s> {
+    pub fn is_int(&self) -> bool {
+        self.is_subtype(&(Type::Primitive(PrimitiveType::Integer)))
+    }
+
+    pub fn is_float(&self) -> bool {
+        self.is_subtype(&(Type::Primitive(PrimitiveType::Float)))
+    }
+
+    pub fn is_bool(&self) -> bool {
+        self.is_subtype(&(Type::Primitive(PrimitiveType::Boolean)))
+    }
 }
 
 impl<'s> Type<'s> {
-    pub fn inferred(kind: TypeKind<'s>) -> Type<'s> {
-        Type { kind, span: None }
-    }
-
     /// Tries to widen with the other type.
     pub fn widen(&self, other: &Type<'s>) -> Option<Type<'s>> {
-        if let (TypeKind::Variant(a), TypeKind::Variant(b)) = (&self.kind, &other.kind) {
+        if let (Type::Variant(a), Type::Variant(b)) = (self, other) {
             // a, b must be nonoverlapping in names.
             // if so, we can just concat their variants
             let mut items = Vec::with_capacity(a.len() + b.len());
@@ -52,10 +56,10 @@ impl<'s> Type<'s> {
                                 });
                                 added = true;
                             } else {
-                                return None
+                                return None;
                             }
                         } else {
-                            return None
+                            return None;
                         }
                     } else {
                         items.push(b.clone())
@@ -78,8 +82,8 @@ impl<'s> Type<'s> {
     }
 
     pub fn is_subtype(&self, other: &Type<'s>) -> bool {
-        match (&self.kind, &other.kind) {
-            (TypeKind::Function(aarg, aret), TypeKind::Function(barg, bret)) => {
+        match (self, other) {
+            (Type::Function(aarg, aret), Type::Function(barg, bret)) => {
                 if let (Some(aarg), Some(barg)) = (aarg, barg) {
                     barg.is_subtype(aarg) && aret.is_subtype(bret)
                 } else if let (None, None) = (aarg, barg) {
@@ -88,12 +92,12 @@ impl<'s> Type<'s> {
                     false
                 }
             }
-            (TypeKind::Variant(a), TypeKind::Variant(b)) => {
+            (Type::Variant(a), Type::Variant(b)) => {
                 for a in a.iter() {
                     let mut found = false;
                     for b in b.iter() {
                         if a.name != b.name {
-                            continue
+                            continue;
                         }
                         if let (Some(ai), Some(bi)) = (&a.inner, &b.inner) {
                             found = ai.is_subtype(bi)
@@ -102,35 +106,35 @@ impl<'s> Type<'s> {
                         }
                     }
                     if !found {
-                        return false
+                        return false;
                     }
                 }
 
                 true
             }
-            (TypeKind::Tuple(a), TypeKind::Tuple(b)) => {
+            (Type::Tuple(a), Type::Tuple(b)) => {
                 if a.len() != b.len() {
-                    return false
+                    return false;
                 }
 
                 for (a, b) in a.iter().zip(b.iter()) {
                     if !a.is_subtype(b) {
-                        return false
+                        return false;
                     }
                 }
 
                 true
             }
-            (TypeKind::Constructor(a), TypeKind::Constructor(b)) => a == b,
-            (TypeKind::Symbol(a), TypeKind::Symbol(b)) => a == b,
-            (TypeKind::Primitive(a), TypeKind::Primitive(b)) => a == b,
+            (Type::Constructor(a), Type::Constructor(b)) => a == b,
+            (Type::Symbol(a), Type::Symbol(b)) => a == b,
+            (Type::Primitive(a), Type::Primitive(b)) => a == b,
             _ => false,
         }
     }
 }
 
-#[derive(Debug, Clone)]
-pub enum TypeKind<'s> {
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum Type<'s> {
     Function(Option<Box<Type<'s>>>, Box<Type<'s>>),
     Variant(Box<[VariantItemType<'s>]>),
     Tuple(Box<[Type<'s>]>),
@@ -139,7 +143,7 @@ pub enum TypeKind<'s> {
     Primitive(PrimitiveType),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum PrimitiveType {
     Float,
     Integer,
@@ -147,7 +151,7 @@ pub enum PrimitiveType {
     Boolean,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct VariantItemType<'s> {
     pub name: Intern<'s>,
     pub inner: Option<Type<'s>>,
@@ -158,6 +162,7 @@ pub struct Local<'s> {
     pub decl_span: Span,
     pub name: Intern<'s>,
     pub mutable: bool,
+    pub ty: Type<'s>,
 }
 
 #[derive(Debug)]
@@ -167,11 +172,11 @@ pub struct Def<'s> {
     pub spec: bool,
     pub arg: Option<Pattern<'s>>,
     pub body: Expr<'s>,
+    pub ty: Type<'s>,
 }
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
 pub struct Symbol(pub(super) NonZeroUsize);
-
 
 #[derive(Debug)]
 pub struct Scope<'s> {
@@ -183,7 +188,7 @@ pub struct Scope<'s> {
 pub struct Expr<'s> {
     pub kind: ExprKind<'s>,
     pub span: Span,
-    pub ty: Option<Type<'s>>,
+    pub ty: Type<'s>,
 }
 
 #[derive(Debug)]
@@ -205,13 +210,12 @@ pub enum ExprKind<'s> {
         on_true: Box<Expr<'s>>,
         on_false: Option<Box<Expr<'s>>>,
     },
-    Tuple {
-        items: Box<[Expr<'s>]>,
-    },
+    Tuple(Box<[Expr<'s>]>),
     StructuralEq(Box<Pattern<'s>>, Box<Expr<'s>>),
     Binary(BinOp, Box<Expr<'s>>, Box<Expr<'s>>),
     Unary(UnOp, Box<Expr<'s>>),
-    Apply(Box<Expr<'s>>, Box<Expr<'s>>),
+    Call(Box<Expr<'s>>, Box<Expr<'s>>),
+    Construct(Symbol, Box<Expr<'s>>),
     Variant(Intern<'s>, Option<Box<Expr<'s>>>),
     Symbol(Symbol),
     Literal(Literal<'s>),
@@ -221,7 +225,7 @@ pub enum ExprKind<'s> {
 pub struct Pattern<'s> {
     pub kind: PatternKind<'s>,
     pub span: Span,
-    pub ty: Option<Type<'s>>,
+    pub ty: Type<'s>,
 }
 
 #[derive(Debug)]
