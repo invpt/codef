@@ -149,10 +149,13 @@ impl<'s> Reifier<'s> {
         let ty = if let Some(ty) = ty {
             let ty = self.type_(&ty)?;
 
-            self.def_types.insert(sym, Type::Function(
-                arg.as_ref().map(|a| Box::new(a.ty.clone())),
-                Box::new(ty.clone()),
-            ));
+            self.def_types.insert(
+                sym,
+                Type::Function(
+                    arg.as_ref().map(|a| Box::new(a.ty.clone())),
+                    Box::new(ty.clone()),
+                ),
+            );
 
             Some(ty)
         } else {
@@ -312,6 +315,12 @@ impl<'s> Reifier<'s> {
                     None
                 };
                 let cond = Box::new(self.expr(cond)?);
+                if !cond.ty.is_bool() {
+                    return Err(ReifyError {
+                        kind: ReifyErrorKind::InvalidType,
+                        span: Some(cond.span),
+                    });
+                }
                 let afterthought = if let Some(afterthought) = afterthought {
                     Some(Box::new(self.expr(afterthought)?))
                 } else {
@@ -343,15 +352,16 @@ impl<'s> Reifier<'s> {
                 on_true,
                 on_false,
             } => {
-                let cond = Box::new({
-                    self.scoper.push();
-                    self.expr(cond)?
-                });
-                let on_true = Box::new({
-                    let on_true = self.expr(on_true)?;
-                    self.scoper.pop();
-                    on_true
-                });
+                self.scoper.push();
+                let cond = Box::new(self.expr(cond)?);
+                if !cond.ty.is_bool() {
+                    return Err(ReifyError {
+                        kind: ReifyErrorKind::InvalidType,
+                        span: Some(cond.span),
+                    });
+                }
+                let on_true = Box::new(self.expr(on_true)?);
+                self.scoper.pop();
 
                 if let Some(on_false) = on_false {
                     let on_false = self.expr(&on_false)?;
@@ -469,7 +479,7 @@ impl<'s> Reifier<'s> {
                                 span: Some(expr.span),
                             });
                         }
-                        if !a.ty.is_subtype(&b.ty) {
+                        if a.ty != b.ty {
                             return Err(ReifyError {
                                 kind: ReifyErrorKind::InvalidType,
                                 span: Some(expr.span),
@@ -478,7 +488,12 @@ impl<'s> Reifier<'s> {
 
                         Type::Primitive(PrimitiveType::Boolean)
                     }
-                    BinOp::BitOr | BinOp::BitXor | BinOp::BitAnd | BinOp::Shl | BinOp::Shr => {
+                    BinOp::BitOr
+                    | BinOp::BitXor
+                    | BinOp::BitAnd
+                    | BinOp::Shl
+                    | BinOp::Shr
+                    | BinOp::Mod => {
                         if !a.ty.is_int() || !b.ty.is_int() {
                             return Err(ReifyError {
                                 kind: ReifyErrorKind::InvalidType,
@@ -488,7 +503,7 @@ impl<'s> Reifier<'s> {
 
                         Type::Primitive(PrimitiveType::Integer)
                     }
-                    BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod => {
+                    BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div => {
                         if !a.ty.is_int() && !a.ty.is_float() {
                             return Err(ReifyError {
                                 kind: ReifyErrorKind::InvalidType,
@@ -501,7 +516,7 @@ impl<'s> Reifier<'s> {
                                 span: Some(expr.span),
                             });
                         }
-                        if !a.ty.is_subtype(&b.ty) {
+                        if a.ty != b.ty {
                             return Err(ReifyError {
                                 kind: ReifyErrorKind::InvalidType,
                                 span: Some(expr.span),

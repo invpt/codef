@@ -8,7 +8,7 @@ mod tokenizer;
 mod reifier;
 mod lowerer;
 
-// Current plan: Parser (done) -> Reifier (done?) -> Typeck (done?) -> CFG (in progress) -> RISC-V?
+// Current plan: Parser (done) -> Reifier (done?) -> Typeck (done?) -> TAC (in progress) -> SSA/CFG -> opts -> RISC-V?
 
 fn main() {
     let path = std::env::args().nth(1).unwrap();

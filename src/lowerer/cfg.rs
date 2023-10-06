@@ -78,6 +78,7 @@ pub enum AnyInsn<Target> {
 pub enum CtrlInsn<Target> {
     Jump(Target),
     Return(Option<TempId>),
+    Call(TempId, TempId, Box<[TempId]>),
     Branch(BranchCmp, TempId, TempId, Target),
 }
 
@@ -92,71 +93,47 @@ pub enum BranchCmp {
 /// Enumeration of all non-control-transfer instructions.
 #[derive(Debug)]
 pub enum Insn {
+    // Copy
+    Copy(TempId, TempId),
+
     // Memory instructions
-    Load(DtSa),
-    Store(DaSt),
+    Load(TempId, TempId, u64),
+    Store(TempId, TempId, u64),
 
     // Reinterpretation instruactions (int bits <-> float bits)
-    FFromIBits(DtSt),
-    IFromFBits(DtSt),
+    FFromIBits(TempId, TempId),
+    IFromFBits(TempId, TempId),
 
     // Integer instructions (operates on things with kind = Kind::Integer)
-    ConstI(DtSc<u64>),
-    BitNotI(DtSt),
-    BitOrI(DtStSt),
-    BitXorI(DtStSt),
-    BitAndI(DtStSt),
-    BitShlI(DtStSt),
-    BitShrI(DtStSt),
-    AddI(DtStSt),
-    SubI(DtStSt),
-    MulI(DtStSt),
-    DivI(DtStSt),
-    ModI(DtStSt),
+    ConstI(TempId, u64),
+    BoolNotI(TempId, TempId),
+    BitNotI(TempId, TempId),
+    BitOrI(TempId, TempId, TempId),
+    BitXorI(TempId, TempId, TempId),
+    BitAndI(TempId, TempId, TempId),
+    BitShlI(TempId, TempId, TempId),
+    BitShrI(TempId, TempId, TempId),
+    NegI(TempId, TempId),
+    AddI(TempId, TempId, TempId),
+    SubI(TempId, TempId, TempId),
+    MulI(TempId, TempId, TempId),
+    DivI(TempId, TempId, TempId),
+    ModI(TempId, TempId, TempId),
+    EqI(TempId, TempId, TempId),
+    NeqI(TempId, TempId, TempId),
+    LtI(TempId, TempId, TempId),
+    LeqI(TempId, TempId, TempId),
 
     // Floating-point instructions (operates on things with kind = Kind::Float)
-    ConstF(DtSc<f64>),
-    AddF(DtStSt),
-    SubF(DtStSt),
-    MulF(DtStSt),
-    DivF(DtStSt),
-}
-
-/// Two-arg instructions with a destination temp and source address.
-#[derive(Debug, PartialEq, Eq)]
-pub struct DtSa {
-    pub dest: TempId,
-    pub src_addr: TempId,
-}
-
-/// Two-arg instructions with a destination address and source address.
-#[derive(Debug, PartialEq, Eq)]
-pub struct DaSt {
-    pub dest_addr: TempId,
-    pub src: TempId,
-}
-
-/// Two-arg instructions with a destination and one source.
-#[derive(Debug, PartialEq, Eq)]
-pub struct DtSt {
-    pub dest: TempId,
-    pub src: TempId,
-}
-
-/// Two-arg instructions with a destination and a source constant.
-#[derive(Debug, PartialEq, Eq)]
-pub struct DtSc<C> {
-    pub dest: TempId,
-    pub cnst: C,
-}
-
-
-/// Three-arg instructions with a destination and two sources.
-#[derive(Debug, PartialEq, Eq)]
-pub struct DtStSt {
-    pub dest: TempId,
-    pub src1: TempId,
-    pub src2: TempId,
+    ConstF(TempId, f64),
+    AddF(TempId, TempId, TempId),
+    SubF(TempId, TempId, TempId),
+    MulF(TempId, TempId, TempId),
+    DivF(TempId, TempId, TempId),
+    EqF(TempId, TempId, TempId),
+    NeqF(TempId, TempId, TempId),
+    LtF(TempId, TempId, TempId),
+    LeqF(TempId, TempId, TempId),
 }
 
 /// The *kind* of data that is stored in an individual place accessible by the program.
