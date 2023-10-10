@@ -23,6 +23,7 @@ fn main() {
     println!("{:#?}", tree);
     let mut reified = reifier::reify(interner, &tree).unwrap();
     println!("\n\n\n\nREIFIED:\n{reified:#?}");
+    lowerer::lower(&reified);
     //typechecker::typecheck(&mut reified).unwrap();
     //println!("\n\n\n\nTYPECHECKING SUCCESS:\n{reified:#?}");
 }

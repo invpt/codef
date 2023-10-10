@@ -1,6 +1,6 @@
 use std::{hash::Hash, num::NonZeroUsize};
 
-use rustc_hash::{FxHashMap, FxHashSet};
+use rustc_hash::FxHashMap;
 
 use crate::{string_storage::Intern, tokenizer::Span};
 
@@ -12,7 +12,17 @@ pub struct Module<'s> {
     pub defs: FxHashMap<Symbol, Def<'s>>,
     pub typedefs: FxHashMap<Symbol, TypeDef<'s>>,
     pub locals: FxHashMap<Symbol, Local<'s>>,
-    pub builtin_funcs: FxHashMap<Symbol, (Option<Type<'s>>, Type<'s>)>,
+    pub builtin_funcs: FxHashMap<Symbol, (Builtin, Option<Type<'s>>, Type<'s>)>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum Builtin {
+    Alloc,
+    Spec,
+    Print,
+    Println,
+    Input,
+    Itoa,
 }
 
 #[derive(Debug)]
@@ -177,6 +187,12 @@ pub struct Def<'s> {
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
 pub struct Symbol(pub(super) NonZeroUsize);
+
+impl Symbol {
+    pub fn index(self) -> usize {
+        self.0.into()
+    }
+}
 
 #[derive(Debug)]
 pub struct Scope<'s> {

@@ -1,6 +1,6 @@
 //! Resolves references, translates the AST to more of a semantics tree.
 
-use std::{num::NonZeroUsize, ops::Deref};
+use std::ops::Deref;
 
 mod rst;
 mod scoper;
@@ -9,7 +9,7 @@ use rustc_hash::FxHashMap;
 
 use crate::{
     parser,
-    string_storage::{Intern, StringInterner, StringStorage},
+    string_storage::{Intern, StringInterner},
     tokenizer::Span,
 };
 
@@ -95,21 +95,25 @@ impl<'s> Reifier<'s> {
         self.define_builtin_type("Bool", Type::Primitive(PrimitiveType::Boolean));
         self.define_builtin_func(
             "print",
+            Builtin::Print,
             Some(Type::Primitive(PrimitiveType::String)),
             Type::Tuple(Box::new([])),
         );
         self.define_builtin_func(
             "println",
+            Builtin::Println,
             Some(Type::Primitive(PrimitiveType::String)),
             Type::Tuple(Box::new([])),
         );
         self.define_builtin_func(
             "input",
+            Builtin::Input,
             Some(Type::Tuple(Box::new([]))),
             Type::Primitive(PrimitiveType::String),
         );
         self.define_builtin_func(
             "itoa",
+            Builtin::Itoa,
             Some(Type::Primitive(PrimitiveType::Integer)),
             Type::Primitive(PrimitiveType::String),
         );
@@ -121,11 +125,11 @@ impl<'s> Reifier<'s> {
             .insert(self.scoper.new_symbol(name), kind);
     }
 
-    fn define_builtin_func(&mut self, name: &str, arg: Option<Type<'s>>, ret: Type<'s>) {
+    fn define_builtin_func(&mut self, name: &str, e: Builtin, arg: Option<Type<'s>>, ret: Type<'s>) {
         let name = self.interner.intern(name.into());
         self.module
             .builtin_funcs
-            .insert(self.scoper.new_symbol(name), (arg, (ret)));
+            .insert(self.scoper.new_symbol(name), (e, arg, (ret)));
     }
 
     fn def(
@@ -643,7 +647,7 @@ impl<'s> Reifier<'s> {
                         def_ty.clone()
                     } else if let Some(_) = self.module.typedefs.get(&sym) {
                         Type::Constructor(sym)
-                    } else if let Some((arg, ret)) = self.module.builtin_funcs.get(&sym) {
+                    } else if let Some((_, arg, ret)) = self.module.builtin_funcs.get(&sym) {
                         Type::Function(arg.clone().map(Box::new), Box::new(ret.clone()))
                     } else {
                         return Err(ReifyError {
