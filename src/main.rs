@@ -1,5 +1,3 @@
-//use crate::parser::utils::ast_size;
-
 mod char_reader;
 mod errors;
 mod parser;
@@ -8,7 +6,7 @@ mod tokenizer;
 mod reifier;
 mod lowerer;
 
-// Current plan: Parser (done) -> Reifier (done?) -> Typeck (done?) -> TAC (in progress) -> SSA/CFG -> opts -> RISC-V?
+// Current plan: Parser (done) -> Reifier+Typeck (done) -> TAC+CFG+SSA (almost done) -> opts -> RISC-V?
 
 fn main() {
     let path = std::env::args().nth(1).unwrap();
@@ -21,9 +19,7 @@ fn main() {
     let errs = errors::ErrorStream::new();
     let (interner, tree) = parser::parse(toks, &errs).unwrap();
     println!("{:#?}", tree);
-    let mut reified = reifier::reify(interner, &tree).unwrap();
+    let reified = reifier::reify(interner, &tree).unwrap();
     println!("\n\n\n\nREIFIED:\n{reified:#?}");
     lowerer::lower(&reified);
-    //typechecker::typecheck(&mut reified).unwrap();
-    //println!("\n\n\n\nTYPECHECKING SUCCESS:\n{reified:#?}");
 }

@@ -1,6 +1,9 @@
 use rustc_hash::FxHashMap;
 
-use crate::{reifier::{Symbol, Builtin}, string_storage::Intern};
+use crate::{
+    reifier::{Builtin, Symbol},
+    string_storage::Intern,
+};
 
 #[derive(Debug)]
 pub struct Module<'s> {
@@ -11,27 +14,29 @@ pub struct Module<'s> {
 #[derive(Debug)]
 pub struct Def<'s> {
     pub name: Intern<'s>,
-    pub value: Value<'s>
+    pub value: Value<'s>,
 }
 
 #[derive(Debug)]
 pub struct Cfg {
-    pub args: Box<[TempRef]>,
-    pub temps: Box<[TempInfo]>,
+    pub params: Box<[Temp]>,
     pub blocks: Box<[Block]>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub struct TempInfo {
     pub kind: Kind,
 }
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
-pub struct TempRef(pub(super) usize);
+pub struct Temp {
+    pub kind: Kind,
+    pub idx: usize,
+}
 
 #[derive(Debug)]
 pub struct Block {
-    pub params: Box<[TempInfo]>,
+    pub params: Box<[Temp]>,
     pub insns: Box<[Insn]>,
     pub branch: Option<Branch<Target>>,
     pub ctrl: Ctrl<Target>,
@@ -43,19 +48,19 @@ pub struct BlockRef(pub(super) usize);
 #[derive(Debug)]
 pub struct Target {
     pub block: BlockRef,
-    pub arguments: Box<[TempRef]>,
+    pub arguments: Box<[Temp]>,
 }
 
 #[derive(Debug)]
 pub enum Ctrl<Target> {
     Jump(Target),
-    Return(TempRef),
+    Return(Temp),
 }
 
 #[derive(Debug)]
-pub struct Branch<Target>(pub BranchCmp, pub TempRef, pub TempRef, pub Target);
+pub struct Branch<Target>(pub BranchCmp, pub Temp, pub Temp, pub Target);
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub enum BranchCmp {
     Eq,
     Neq,
@@ -63,60 +68,105 @@ pub enum BranchCmp {
     Geq,
 }
 
-/// Enumeration of all non-control-transfer instructions.
 #[derive(Debug)]
 pub enum Insn {
-    // Copy
-    Copy(TempRef, TempRef),
+    Load(Temp, Producer),
+    Store(MemRef, Temp),
+}
 
-    // Memory instructions
-    Load(TempRef, TempRef, u64),
-    LoadSym(TempRef, Symbol),
-    LoadBuiltin(TempRef, Builtin),
-    LoadIr(TempRef, Cfg),
-    Store(TempRef, TempRef, u64),
+#[derive(Debug)]
+pub enum Producer {
+    Memory(Kind, MemRef),
+    Symbol(Kind, Symbol),
+    Builtin(Builtin),
+    Ir(Cfg),
+    Copy(Temp),
+    Binary(BinOp, Temp, Temp),
+    Unary(UnOp, Temp),
+    Call(Temp, Box<[Temp]>, Kind),
+    ConstI(u64),
+    ConstF(f64),
+}
 
-    // Reinterpretation instruactions (int bits <-> float bits)
-    FFromIBits(TempRef, TempRef),
-    IFromFBits(TempRef, TempRef),
+impl Producer {
+    pub fn result_kind(&self) -> Kind {
+        use Kind::*;
+        use Producer::*;
 
-    // Integer instructions (operates on things with kind = Kind::Integer)
-    ConstI(TempRef, u64),
-    BoolNotI(TempRef, TempRef),
-    BitNotI(TempRef, TempRef),
-    BitOrI(TempRef, TempRef, TempRef),
-    BitXorI(TempRef, TempRef, TempRef),
-    BitAndI(TempRef, TempRef, TempRef),
-    BitShlI(TempRef, TempRef, TempRef),
-    BitShrI(TempRef, TempRef, TempRef),
-    NegI(TempRef, TempRef),
-    AddI(TempRef, TempRef, TempRef),
-    SubI(TempRef, TempRef, TempRef),
-    MulI(TempRef, TempRef, TempRef),
-    DivI(TempRef, TempRef, TempRef),
-    ModI(TempRef, TempRef, TempRef),
-    EqI(TempRef, TempRef, TempRef),
-    NeqI(TempRef, TempRef, TempRef),
-    LtI(TempRef, TempRef, TempRef),
-    LeqI(TempRef, TempRef, TempRef),
+        match self {
+            Builtin(_) | Ir(_) => Integer,
+            Memory(k, _) | Symbol(k, _) | Call(_, _, k) => *k,
+            Copy(t) => t.kind,
+            Binary(op, _, _) => match op {
+                BinOp::BitOrI
+                | BinOp::BitXorI
+                | BinOp::BitAndI
+                | BinOp::BitShlI
+                | BinOp::BitShrI
+                | BinOp::AddI
+                | BinOp::SubI
+                | BinOp::MulI
+                | BinOp::DivI
+                | BinOp::ModI
+                | BinOp::EqI
+                | BinOp::NeqI
+                | BinOp::LtI
+                | BinOp::LeqI
+                | BinOp::EqF
+                | BinOp::NeqF
+                | BinOp::LtF
+                | BinOp::LeqF => Integer,
+                BinOp::AddF | BinOp::SubF | BinOp::MulF | BinOp::DivF => Float,
+            },
+            Unary(op, _) => match op {
+                UnOp::BoolNotI | UnOp::BitNotI | UnOp::NegI => Integer,
+                UnOp::NegF => Float,
+            },
+            ConstI(_) => Integer,
+            ConstF(_) => Float,
+        }
+    }
+}
 
-    // Floating-point instructions (operates on things with kind = Kind::Float)
-    ConstF(TempRef, f64),
-    AddF(TempRef, TempRef, TempRef),
-    SubF(TempRef, TempRef, TempRef),
-    MulF(TempRef, TempRef, TempRef),
-    DivF(TempRef, TempRef, TempRef),
-    EqF(TempRef, TempRef, TempRef),
-    NeqF(TempRef, TempRef, TempRef),
-    LtF(TempRef, TempRef, TempRef),
-    LeqF(TempRef, TempRef, TempRef),
+#[derive(Debug, Clone)]
+pub struct MemRef(pub Temp, pub u64);
 
-    // Function call
-    Call(TempRef, TempRef, Box<[TempRef]>),
+#[derive(Debug, Clone, Copy)]
+pub enum BinOp {
+    BitOrI,
+    BitXorI,
+    BitAndI,
+    BitShlI,
+    BitShrI,
+    AddI,
+    SubI,
+    MulI,
+    DivI,
+    ModI,
+    EqI,
+    NeqI,
+    LtI,
+    LeqI,
+    AddF,
+    SubF,
+    MulF,
+    DivF,
+    EqF,
+    NeqF,
+    LtF,
+    LeqF,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum UnOp {
+    BoolNotI,
+    BitNotI,
+    NegI,
+    NegF,
 }
 
 /// The *kind* of data that is stored in an individual place accessible by the program.
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Kind {
     Integer,
     Float,
@@ -124,11 +174,13 @@ pub enum Kind {
 
 impl Kind {
     pub fn of(ty: &crate::reifier::Type) -> Kind {
-        use crate::reifier::{Type, PrimitiveType};
+        use crate::reifier::{PrimitiveType, Type};
         match ty {
             Type::Constructor(..) => panic!("attempted to compute kind of constructor"),
             Type::Function(..) => Kind::Integer,
-            Type::Primitive(PrimitiveType::Boolean | PrimitiveType::Integer | PrimitiveType::String) => Kind::Integer,
+            Type::Primitive(
+                PrimitiveType::Boolean | PrimitiveType::Integer | PrimitiveType::String,
+            ) => Kind::Integer,
             Type::Primitive(PrimitiveType::Float) => Kind::Float,
             Type::Variant(..) => Kind::Integer,
             Type::Tuple(..) => Kind::Integer,

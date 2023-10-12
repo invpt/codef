@@ -933,6 +933,13 @@ impl<'s> Reifier<'s> {
                     });
                 };
 
+                if !local.mutable {
+                    return Err(ReifyError {
+                        kind: ReifyErrorKind::InvalidPattern,
+                        span: Some(expr.span),
+                    });
+                }
+
                 (PatternKind::Solve(SolveMarker::Set, sym), local.ty.clone())
             }
             &parser::ExprKind::Name(name) => {
