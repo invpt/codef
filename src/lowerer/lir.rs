@@ -19,8 +19,10 @@ pub struct Def<'s> {
 
 #[derive(Debug)]
 pub struct Cfg {
+    pub temps: usize,
     pub params: Box<[Temp]>,
     pub blocks: Box<[Block]>,
+    pub entry: BlockRef,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -35,15 +37,33 @@ pub struct Temp {
 }
 
 #[derive(Debug)]
-pub struct Block {
+pub struct Block<T = Target> {
     pub params: Box<[Temp]>,
     pub insns: Box<[Insn]>,
-    pub branch: Option<Branch<Target>>,
-    pub ctrl: Ctrl<Target>,
+    pub branch: Option<Branch<T>>,
+    pub ctrl: Ctrl<T>,
+}
+
+impl<T> Block<T> {
+    pub fn successors(&self) -> impl Iterator<Item = &T> {
+        let mut succs = [None, None];
+
+        match &self.branch {
+            Some(Branch(.., t)) => succs[0] = Some(t),
+            None => (),
+        }
+
+        match &self.ctrl {
+            Ctrl::Jump(t) => succs[1] = Some(t),
+            Ctrl::Return(_) => (),
+        }
+
+        succs.into_iter().filter_map(|s| s)
+    }
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
-pub struct BlockRef(pub(super) usize);
+pub struct BlockRef(pub usize);
 
 #[derive(Debug)]
 pub struct Target {
@@ -176,7 +196,6 @@ impl Kind {
     pub fn of(ty: &crate::reifier::Type) -> Kind {
         use crate::reifier::{PrimitiveType, Type};
         match ty {
-            Type::Constructor(..) => panic!("attempted to compute kind of constructor"),
             Type::Function(..) => Kind::Integer,
             Type::Primitive(
                 PrimitiveType::Boolean | PrimitiveType::Integer | PrimitiveType::String,
@@ -184,7 +203,8 @@ impl Kind {
             Type::Primitive(PrimitiveType::Float) => Kind::Float,
             Type::Variant(..) => Kind::Integer,
             Type::Tuple(..) => Kind::Integer,
-            Type::Symbol(..) => Kind::Integer, // is this valid?
+            Type::Instance(..) => Kind::Integer, // is this valid?
+            Type::Unknown => unreachable!(),
         }
     }
 }

@@ -1,0 +1,5 @@
+def sin(val x :: Int) => x * x;
+
+
+def f() -> Int => f();
+def g() -> Int => g();

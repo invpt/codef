@@ -5,8 +5,10 @@ mod string_storage;
 mod tokenizer;
 mod reifier;
 mod lowerer;
+mod optimizers;
+mod backends;
 
-// Current plan: Parser (done) -> Reifier+Typeck (done) -> TAC+CFG+SSA (almost done) -> opts -> RISC-V?
+// Current plan: Parser (done) -> Reifier+Typeck (done) -> TAC+CFG+SSA (done) -> opts (none so far) -> RISC-V (in progress - regalloc)
 
 fn main() {
     let path = std::env::args().nth(1).unwrap();
@@ -18,8 +20,9 @@ fn main() {
     );
     let errs = errors::ErrorStream::new();
     let (interner, tree) = parser::parse(toks, &errs).unwrap();
-    println!("{:#?}", tree);
+    //println!("{:#?}", tree);
     let reified = reifier::reify(interner, &tree).unwrap();
-    println!("\n\n\n\nREIFIED:\n{reified:#?}");
-    lowerer::lower(&reified);
+    //println!("\n\n\n\nREIFIED:\n{reified:#?}");
+    let cfg = lowerer::lower(&reified);
+    dbg!(cfg);
 }

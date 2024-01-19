@@ -64,11 +64,12 @@ impl<'s> Reifier<'s> {
         let parser::Expr {
             kind: parser::ExprKind::Scope(scope),
             ..
-        } = expr else {
+        } = expr
+        else {
             return Err(ReifyError {
-                kind: ReifyErrorKind::InvalidFile,
-                span: None,
-            })
+                kind: ReifyErrorKind::UnexpectedTopLevelStatement,
+                span: Some(expr.span),
+            });
         };
         // There cannot be any statements at the top-level
         if let [expr, ..] = &*scope.exprs {
@@ -79,9 +80,7 @@ impl<'s> Reifier<'s> {
         }
 
         self.scoper.push();
-        // Define builtins
         self.define_builtins();
-
         self.scope(scope)?;
         self.scoper.pop();
 
@@ -89,110 +88,96 @@ impl<'s> Reifier<'s> {
     }
 
     fn define_builtins(&mut self) {
-        self.define_builtin_type("Int", Type::Primitive(PrimitiveType::Integer));
-        self.define_builtin_type("Float", Type::Primitive(PrimitiveType::Float));
-        self.define_builtin_type("String", Type::Primitive(PrimitiveType::String));
-        self.define_builtin_type("Bool", Type::Primitive(PrimitiveType::Boolean));
-        self.define_builtin_func(
+        self.builtin_type("Int", Type::Primitive(PrimitiveType::Integer));
+        self.builtin_type("Float", Type::Primitive(PrimitiveType::Float));
+        self.builtin_type("String", Type::Primitive(PrimitiveType::String));
+        self.builtin_type("Bool", Type::Primitive(PrimitiveType::Boolean));
+        self.builtin_def(
             "print",
             Builtin::Print,
-            Some(Type::Primitive(PrimitiveType::String)),
-            Type::Tuple(Box::new([])),
+            Type::Function(
+                Some(Box::new(Type::Primitive(PrimitiveType::String))),
+                Box::new(Type::Tuple(Box::new([]))),
+            ),
         );
-        self.define_builtin_func(
+        self.builtin_def(
             "println",
-            Builtin::Println,
-            Some(Type::Primitive(PrimitiveType::String)),
-            Type::Tuple(Box::new([])),
+            Builtin::Print,
+            Type::Function(
+                Some(Box::new(Type::Primitive(PrimitiveType::String))),
+                Box::new(Type::Tuple(Box::new([]))),
+            ),
         );
-        self.define_builtin_func(
+        self.builtin_def(
             "input",
-            Builtin::Input,
-            Some(Type::Tuple(Box::new([]))),
-            Type::Primitive(PrimitiveType::String),
+            Builtin::Print,
+            Type::Function(
+                Some(Box::new(Type::Tuple(Box::new([])))),
+                Box::new(Type::Primitive(PrimitiveType::String)),
+            ),
         );
-        self.define_builtin_func(
+        self.builtin_def(
             "itoa",
-            Builtin::Itoa,
-            Some(Type::Primitive(PrimitiveType::Integer)),
-            Type::Primitive(PrimitiveType::String),
+            Builtin::Print,
+            Type::Function(
+                Some(Box::new(Type::Primitive(PrimitiveType::Integer))),
+                Box::new(Type::Primitive(PrimitiveType::String)),
+            ),
         );
     }
 
-    fn define_builtin_type(&mut self, name: &str, kind: Type<'s>) {
+    fn builtin_type(&mut self, name: &str, kind: Type<'s>) {
         let name = self.interner.intern(name.into());
         self.builtin_types
             .insert(self.scoper.new_symbol(name), kind);
     }
 
-    fn define_builtin_func(&mut self, name: &str, e: Builtin, arg: Option<Type<'s>>, ret: Type<'s>) {
+    fn builtin_def(&mut self, name: &str, which: Builtin, ty: Type<'s>) {
         let name = self.interner.intern(name.into());
         self.module
-            .builtin_funcs
-            .insert(self.scoper.new_symbol(name), (e, arg, (ret)));
+            .builtins
+            .insert(self.scoper.new_symbol(name), (which, ty));
     }
 
-    fn def(
-        &mut self,
-        init_span: Span,
-        name: Intern<'s>,
-        spec: bool,
-        arg: Option<&parser::Expr<'s>>,
-        body: &parser::Expr<'s>,
-        ty: Option<&parser::Expr<'s>>,
-    ) -> Result<'s, ()> {
-        let sym = self.scoper.new_symbol(name);
+    fn scope(&mut self, scope: &parser::Scope<'s>) -> Result<'s, Scope<'s>> {
+        self.scoper.push();
 
-        let arg = if let Some(arg) = arg {
-            Some(self.pattern(arg, None)?)
-        } else {
-            None
-        };
+        for def in &*scope.typedefs {
+            self.typedef(def.decl_span, def.name, &def.value)?;
+        }
 
-        let ty_span = ty.map(|ty| ty.span);
-        let ty = if let Some(ty) = ty {
-            let ty = self.type_(&ty)?;
+        let mut assigned_symbols = Vec::with_capacity(scope.defs.len());
+        for def in &*scope.defs {
+            let sym = self.scoper.new_symbol(def.name);
+            self.def_types.insert(sym, Type::Unknown);
+            assigned_symbols.push(sym);
+        }
+        for (sym, def) in assigned_symbols.into_iter().zip(scope.defs.iter()) {
+            self.def(sym, &def)?;
+        }
 
-            self.def_types.insert(
-                sym,
-                Type::Function(
-                    arg.as_ref().map(|a| Box::new(a.ty.clone())),
-                    Box::new(ty.clone()),
-                ),
-            );
+        let mut exprs = Vec::with_capacity(scope.exprs.len());
+        for expr in &*scope.exprs {
+            exprs.push(self.expr(expr, &Type::Unknown)?)
+        }
 
-            Some(ty)
-        } else {
-            None
-        };
+        self.scoper.pop();
 
-        let body = {
-            let mut body = self.expr(body)?;
-            if let (Some(ty), Some(ty_span)) = (ty, ty_span) {
-                if body.ty.is_subtype(&ty) {
-                    body.ty = ty
-                } else {
-                    return Err(ReifyError {
-                        kind: ReifyErrorKind::TypeAssertionConflict,
-                        span: Some(ty_span),
-                    });
-                }
-            }
+        Ok(Scope {
+            exprs: exprs.into_boxed_slice(),
+            discard: scope.discard,
+        })
+    }
 
-            body
-        };
+    fn def(&mut self, sym: Symbol, def: &parser::Def<'s>) -> Result<'s, ()> {
+        let body = self.expr(&def.value, &Type::Unknown)?;
 
+        self.def_types.insert(sym, body.ty.clone());
         self.module.defs.insert(
             sym,
             Def {
-                decl_span: init_span,
-                spec,
-                name,
-                ty: Type::Function(
-                    arg.as_ref().map(|a| Box::new(a.ty.clone())),
-                    Box::new(body.ty.clone()),
-                ),
-                arg,
+                decl_span: def.decl_span,
+                name: def.name,
                 body,
             },
         );
@@ -207,55 +192,23 @@ impl<'s> Reifier<'s> {
         value: &parser::Expr<'s>,
     ) -> Result<'s, ()> {
         let sym = self.scoper.new_symbol(name);
-        let type_ = self.type_(value)?;
-        self.module.typedefs.insert(
+        let inner = self.type_(value)?;
+        self.module.defs.insert(
             sym,
-            TypeDef {
+            Def {
                 decl_span: init_span,
                 name,
-                inner: type_,
+                body: Expr {
+                    kind: ExprKind::Constructor(sym),
+                    span: value.span,
+                    ty: Type::Function(Some(Box::new(inner)), Box::new(Type::Instance(sym))),
+                },
             },
         );
         Ok(())
     }
 
-    fn scope(&mut self, scope: &parser::Scope<'s>) -> Result<'s, Scope<'s>> {
-        self.scoper.push();
-
-        // TODO: traverse in topological order
-        for def in &*scope.defs {
-            match &def.value.kind {
-                parser::ExprKind::Abstract {
-                    arg,
-                    spec,
-                    ty,
-                    body,
-                } => self.def(
-                    def.decl_span,
-                    def.name,
-                    *spec,
-                    arg.as_deref(),
-                    &*body,
-                    ty.as_deref(),
-                )?,
-                _ => self.typedef(def.decl_span, def.name, &def.value)?,
-            }
-        }
-
-        let mut exprs = Vec::new();
-        for expr in &*scope.exprs {
-            exprs.push(self.expr(expr)?)
-        }
-
-        self.scoper.pop();
-
-        Ok(Scope {
-            exprs: exprs.into_boxed_slice(),
-            discard: scope.discard,
-        })
-    }
-
-    fn expr(&mut self, expr: &parser::Expr<'s>) -> Result<'s, Expr<'s>> {
+    fn expr(&mut self, expr: &parser::Expr<'s>, superty: &Type<'s>) -> Result<'s, Expr<'s>> {
         let (kind, ty) = match &expr.kind {
             parser::ExprKind::Scope(scope) => {
                 let scope = self.scope(scope)?;
@@ -268,40 +221,34 @@ impl<'s> Reifier<'s> {
                     _ => (ExprKind::Scope(scope), Type::Tuple(Box::new([]))),
                 }
             }
-            &parser::ExprKind::Abstract {
+            parser::ExprKind::Abstract {
                 spec,
-                ref arg,
-                ref body,
-                ref ty,
+                arg,
+                body,
+                ret,
             } => {
                 let arg = if let Some(arg) = arg {
-                    Some(self.pattern(arg, None)?)
+                    Some(self.pattern(arg, &Type::Unknown)?)
                 } else {
                     None
                 };
-                let body = Box::new({
-                    let mut body = self.expr(body)?;
-                    if let Some(ty) = ty {
-                        let ty_span = ty.span;
-                        let ty = self.type_(&ty)?;
-                        if body.ty.is_subtype(&ty) {
-                            body.ty = ty
-                        } else {
-                            return Err(ReifyError {
-                                kind: ReifyErrorKind::TypeAssertionConflict,
-                                span: Some(ty_span),
-                            });
-                        }
-                    }
 
-                    body
-                });
+                let body_ty = if let Some(ret) = ret {
+                    self.type_(&ret)?
+                } else {
+                    Type::Unknown
+                };
 
+                let body = self.expr(body, &body_ty)?;
                 let arg_ty = arg.as_ref().map(|a| Box::new(a.ty.clone()));
                 let body_ty = Box::new(body.ty.clone());
 
                 (
-                    ExprKind::Abstract { spec, arg, body },
+                    ExprKind::Abstract {
+                        spec: *spec,
+                        arg,
+                        body: Box::new(body),
+                    },
                     Type::Function(arg_ty, body_ty),
                 )
             }
@@ -314,32 +261,19 @@ impl<'s> Reifier<'s> {
                 self.scoper.push();
 
                 let init = if let Some(init) = init {
-                    Some(Box::new(self.expr(init)?))
+                    Some(Box::new(self.expr(init, &Type::Unknown)?))
                 } else {
                     None
                 };
-                let cond = Box::new(self.expr(cond)?);
-                if !cond.ty.is_bool() {
-                    return Err(ReifyError {
-                        kind: ReifyErrorKind::InvalidType,
-                        span: Some(cond.span),
-                    });
-                }
+                let cond = Box::new(self.expr(cond, &Type::Primitive(PrimitiveType::Boolean))?);
                 let afterthought = if let Some(afterthought) = afterthought {
-                    Some(Box::new(self.expr(afterthought)?))
+                    Some(Box::new(self.expr(afterthought, &Type::Unknown)?))
                 } else {
                     None
                 };
-                let body = Box::new(self.expr(body)?);
+                let body = Box::new(self.expr(body, &Type::Tuple(Box::new([])))?);
 
                 self.scoper.pop();
-
-                if !body.ty.is_subtype(&(Type::Tuple(Box::new([])))) {
-                    return Err(ReifyError {
-                        kind: ReifyErrorKind::InvalidType,
-                        span: Some(expr.span),
-                    });
-                }
 
                 (
                     ExprKind::For {
@@ -357,22 +291,16 @@ impl<'s> Reifier<'s> {
                 on_false,
             } => {
                 self.scoper.push();
-                let cond = Box::new(self.expr(cond)?);
-                if !cond.ty.is_bool() {
-                    return Err(ReifyError {
-                        kind: ReifyErrorKind::InvalidType,
-                        span: Some(cond.span),
-                    });
-                }
-                let on_true = Box::new(self.expr(on_true)?);
+                let cond = Box::new(self.expr(cond, &Type::Primitive(PrimitiveType::Boolean))?);
+                let on_true = Box::new(self.expr(on_true, superty)?);
                 self.scoper.pop();
 
                 if let Some(on_false) = on_false {
-                    let on_false = self.expr(&on_false)?;
+                    let on_false = self.expr(&on_false, superty)?;
 
                     let Some(widened) = on_true.ty.widen(&on_false.ty) else {
                         return Err(ReifyError {
-                            kind: ReifyErrorKind::InvalidType,
+                            kind: dbg!(ReifyErrorKind::InvalidType),
                             span: Some(expr.span),
                         });
                     };
@@ -397,10 +325,18 @@ impl<'s> Reifier<'s> {
                 }
             }
             parser::ExprKind::Tuple { items } => {
+                let supertys = if let Type::Tuple(tys) = superty {
+                    &**tys
+                } else {
+                    &[]
+                }
+                .iter()
+                .chain(std::iter::repeat(&Type::Unknown));
+
                 let mut reified_items = Vec::with_capacity(items.len());
                 let mut tys = Vec::with_capacity(items.len());
-                for item in &**items {
-                    let reified = self.expr(&item)?;
+                for (item, superty) in items.iter().zip(supertys) {
+                    let reified = self.expr(&item, superty)?;
                     tys.push(reified.ty.clone());
                     reified_items.push(reified);
                 }
@@ -411,16 +347,9 @@ impl<'s> Reifier<'s> {
                 )
             }
             parser::ExprKind::Assert { expr, ty } => {
-                let expr = self.expr(expr)?;
                 let asserted = self.type_(ty)?;
-                if expr.ty.is_subtype(&asserted) {
-                    (expr.kind, expr.ty)
-                } else {
-                    return Err(ReifyError {
-                        kind: ReifyErrorKind::InvalidType,
-                        span: Some(expr.span),
-                    });
-                }
+                let expr = self.expr(expr, &asserted)?;
+                (expr.kind, expr.ty)
             }
             &parser::ExprKind::Binary(BinOp::Eq, ref a, ref b) => {
                 let kind = match (Self::has_solve(a)?, Self::has_solve(b)?) {
@@ -431,20 +360,20 @@ impl<'s> Reifier<'s> {
                         })
                     }
                     (true, false) => {
-                        let b = Box::new(self.expr(b)?);
-                        ExprKind::StructuralEq(Box::new(self.pattern(a, Some(&b.ty))?), b)
+                        let b = Box::new(self.expr(b, &Type::Unknown)?);
+                        ExprKind::StructuralEq(Box::new(self.pattern(a, &b.ty)?), b)
                     }
                     (false, true) => {
-                        let a = Box::new(self.expr(a)?);
-                        ExprKind::StructuralEq(Box::new(self.pattern(b, Some(&a.ty))?), a)
+                        let a = Box::new(self.expr(a, &Type::Unknown)?);
+                        ExprKind::StructuralEq(Box::new(self.pattern(b, &a.ty)?), a)
                     }
                     (false, false) => {
-                        let a = Box::new(self.expr(a)?);
-                        let b = Box::new(self.expr(b)?);
+                        let a = Box::new(self.expr(a, &Type::Unknown)?);
+                        let b = Box::new(self.expr(b, &Type::Unknown)?);
 
                         if a.ty.widen(&b.ty).is_none() {
                             return Err(ReifyError {
-                                kind: ReifyErrorKind::InvalidType,
+                                kind: dbg!(ReifyErrorKind::InvalidType),
                                 span: Some(expr.span),
                             });
                         }
@@ -456,41 +385,44 @@ impl<'s> Reifier<'s> {
                 (kind, Type::Primitive(PrimitiveType::Boolean))
             }
             &parser::ExprKind::Binary(op, ref a, ref b) => {
-                let a = Box::new(self.expr(a)?);
-                let b = Box::new(self.expr(b)?);
-
-                let ty = match op {
+                let (ty, a, b) = match op {
                     BinOp::Eq | BinOp::Neq => {
+                        let a = Box::new(self.expr(a, &Type::Unknown)?);
+                        let b = Box::new(self.expr(b, &Type::Unknown)?);
+
                         if a.ty.widen(&b.ty).is_none() {
                             return Err(ReifyError {
-                                kind: ReifyErrorKind::InvalidType,
+                                kind: dbg!(ReifyErrorKind::InvalidType),
                                 span: Some(expr.span),
                             });
                         }
 
-                        Type::Primitive(PrimitiveType::Boolean)
+                        (Type::Primitive(PrimitiveType::Boolean), a, b)
                     }
                     BinOp::Lt | BinOp::Leq | BinOp::Gt | BinOp::Geq => {
+                        let a = Box::new(self.expr(a, &Type::Unknown)?);
+                        let b = Box::new(self.expr(b, &Type::Unknown)?);
+
                         if !a.ty.is_int() && !a.ty.is_float() {
                             return Err(ReifyError {
-                                kind: ReifyErrorKind::InvalidType,
+                                kind: dbg!(ReifyErrorKind::InvalidType),
                                 span: Some(expr.span),
                             });
                         }
                         if !b.ty.is_int() && !b.ty.is_float() {
                             return Err(ReifyError {
-                                kind: ReifyErrorKind::InvalidType,
+                                kind: dbg!(ReifyErrorKind::InvalidType),
                                 span: Some(expr.span),
                             });
                         }
                         if a.ty != b.ty {
                             return Err(ReifyError {
-                                kind: ReifyErrorKind::InvalidType,
+                                kind: dbg!(ReifyErrorKind::InvalidType),
                                 span: Some(expr.span),
                             });
                         }
 
-                        Type::Primitive(PrimitiveType::Boolean)
+                        (Type::Primitive(PrimitiveType::Boolean), a, b)
                     }
                     BinOp::BitOr
                     | BinOp::BitXor
@@ -498,36 +430,35 @@ impl<'s> Reifier<'s> {
                     | BinOp::Shl
                     | BinOp::Shr
                     | BinOp::Mod => {
-                        if !a.ty.is_int() || !b.ty.is_int() {
-                            return Err(ReifyError {
-                                kind: ReifyErrorKind::InvalidType,
-                                span: Some(expr.span),
-                            });
-                        }
+                        let a = Box::new(self.expr(a, &Type::Primitive(PrimitiveType::Integer))?);
+                        let b = Box::new(self.expr(b, &Type::Primitive(PrimitiveType::Integer))?);
 
-                        Type::Primitive(PrimitiveType::Integer)
+                        (Type::Primitive(PrimitiveType::Integer), a, b)
                     }
                     BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div => {
+                        let a = Box::new(self.expr(a, superty)?);
+                        let b = Box::new(self.expr(b, superty)?);
+
                         if !a.ty.is_int() && !a.ty.is_float() {
                             return Err(ReifyError {
-                                kind: ReifyErrorKind::InvalidType,
+                                kind: dbg!(ReifyErrorKind::InvalidType),
                                 span: Some(expr.span),
                             });
                         }
                         if !b.ty.is_int() && !b.ty.is_float() {
                             return Err(ReifyError {
-                                kind: ReifyErrorKind::InvalidType,
+                                kind: dbg!(ReifyErrorKind::InvalidType),
                                 span: Some(expr.span),
                             });
                         }
                         if a.ty != b.ty {
                             return Err(ReifyError {
-                                kind: ReifyErrorKind::InvalidType,
+                                kind: dbg!(ReifyErrorKind::InvalidType),
                                 span: Some(expr.span),
                             });
                         }
 
-                        a.ty.clone()
+                        (a.ty.clone(), a, b)
                     }
                     _ => todo!(),
                 };
@@ -535,13 +466,13 @@ impl<'s> Reifier<'s> {
                 (ExprKind::Binary(op, a, b), ty)
             }
             &parser::ExprKind::Unary(op, ref a) => {
-                let a = Box::new(self.expr(a)?);
+                let a = Box::new(self.expr(a, &Type::Unknown)?);
 
                 let ty = match op {
                     UnOp::Neg => {
                         if !a.ty.is_int() && !a.ty.is_float() {
                             return Err(ReifyError {
-                                kind: ReifyErrorKind::InvalidType,
+                                kind: dbg!(ReifyErrorKind::InvalidType),
                                 span: Some(expr.span),
                             });
                         }
@@ -551,7 +482,7 @@ impl<'s> Reifier<'s> {
                     UnOp::Not => {
                         if !a.ty.is_bool() {
                             return Err(ReifyError {
-                                kind: ReifyErrorKind::InvalidType,
+                                kind: dbg!(ReifyErrorKind::InvalidType),
                                 span: Some(expr.span),
                             });
                         }
@@ -563,44 +494,47 @@ impl<'s> Reifier<'s> {
                 (ExprKind::Unary(op, a), ty)
             }
             parser::ExprKind::Apply(a, b) => {
-                let a = Box::new(self.expr(a)?);
-                let b = Box::new(self.expr(b)?);
-
-                match &a.ty {
-                    Type::Function(param, ret) => {
-                        let Some(param) = param else {
-                            return Err(ReifyError {
-                                kind: ReifyErrorKind::InvalidType,
-                                span: Some(expr.span),
-                            });
-                        };
-
-                        if b.ty.is_subtype(&param) {
-                            let ret = ret.deref().clone();
-                            (ExprKind::Call(a, b), ret)
-                        } else {
-                            return Err(ReifyError {
-                                kind: ReifyErrorKind::InvalidType,
-                                span: Some(expr.span),
-                            });
-                        }
-                    }
-                    &Type::Constructor(sym) => {
-                        let typedef = self.module.typedefs.get(&sym).unwrap();
-                        if b.ty.is_subtype(&typedef.inner) {
-                            (ExprKind::Construct(sym, b), Type::Symbol(sym))
-                        } else {
-                            return Err(ReifyError {
-                                kind: ReifyErrorKind::InvalidType,
-                                span: Some(expr.span),
-                            });
-                        }
-                    }
-                    _ => {
+                if !superty.is_unknown() {
+                    let b = Box::new(self.expr(b, &Type::Unknown)?);
+                    let a_ty =
+                        Type::Function(Some(Box::new(b.ty.clone())), Box::new(superty.clone()));
+                    let a = Box::new(self.expr(&a, &a_ty)?);
+                    let Type::Function(_, ret) = &a.ty else {
                         return Err(ReifyError {
-                            kind: ReifyErrorKind::InvalidType,
+                            kind: dbg!(ReifyErrorKind::InvalidType),
                             span: Some(expr.span),
-                        })
+                        });
+                    };
+
+                    let ret = ret.deref().clone();
+                    (ExprKind::Apply(a, b), ret)
+                } else {
+                    let a = Box::new(self.expr(a, &Type::Unknown)?);
+
+                    match &a.ty {
+                        Type::Function(param, ret) => {
+                            let Some(param) = param else {
+                                return Err(ReifyError {
+                                    kind: dbg!(ReifyErrorKind::InvalidType),
+                                    span: Some(expr.span),
+                                });
+                            };
+
+                            let b = Box::new(self.expr(b, &*param)?);
+
+                            let ret = ret.deref().clone();
+                            (ExprKind::Apply(a, b), ret)
+                        }
+                        Type::Unknown => (
+                            ExprKind::Apply(a, Box::new(self.expr(b, &Type::Unknown)?)),
+                            Type::Unknown,
+                        ),
+                        _ => {
+                            return Err(ReifyError {
+                                kind: dbg!(ReifyErrorKind::InvalidType),
+                                span: Some(expr.span),
+                            })
+                        }
                     }
                 }
             }
@@ -613,7 +547,7 @@ impl<'s> Reifier<'s> {
             parser::ExprKind::Variant(items) => match &**items {
                 [item] => {
                     if let Some(value) = &item.value {
-                        let value = self.expr(&value)?;
+                        let value = self.expr(&value, &Type::Unknown)?;
                         let ty = Type::Variant(Box::new([VariantItemType {
                             name: item.name,
                             inner: Some(value.ty.clone()),
@@ -638,20 +572,36 @@ impl<'s> Reifier<'s> {
             },
             &parser::ExprKind::Name(name) => {
                 if let Some(sym) = self.scoper.lookup(name) {
-                    let kind = ExprKind::Symbol(sym);
+                    let kind = ExprKind::Load(sym);
                     let ty = if let Some(local) = self.module.locals.get(&sym) {
-                        local.ty.clone()
+                        if !superty.is_unknown() && superty.is_subtype(&local.ty) {
+                            let local = self.module.locals.get_mut(&sym).unwrap();
+                            local.ty = superty.clone();
+                            local.ty.clone()
+                        } else {
+                            local.ty.clone()
+                        }
                     } else if let Some(def) = self.module.defs.get(&sym) {
-                        def.ty.clone()
+                        if !superty.is_unknown() && superty.is_subtype(&def.body.ty) {
+                            let def = self.module.defs.get_mut(&sym).unwrap();
+                            def.body.ty = superty.clone();
+                            def.body.ty.clone()
+                        } else {
+                            def.body.ty.clone()
+                        }
                     } else if let Some(def_ty) = self.def_types.get(&sym) {
-                        def_ty.clone()
-                    } else if let Some(_) = self.module.typedefs.get(&sym) {
-                        Type::Constructor(sym)
-                    } else if let Some((_, arg, ret)) = self.module.builtin_funcs.get(&sym) {
-                        Type::Function(arg.clone().map(Box::new), Box::new(ret.clone()))
+                        if !superty.is_unknown() && superty.is_subtype(def_ty) {
+                            let def_ty = self.def_types.get_mut(&sym).unwrap();
+                            *def_ty = superty.clone();
+                            def_ty.clone()
+                        } else {
+                            def_ty.clone()
+                        }
+                    } else if let Some((_, ty)) = self.module.builtins.get(&sym) {
+                        ty.clone()
                     } else {
                         return Err(ReifyError {
-                            kind: ReifyErrorKind::InvalidType,
+                            kind: dbg!(ReifyErrorKind::InvalidType),
                             span: Some(expr.span),
                         });
                     };
@@ -676,6 +626,13 @@ impl<'s> Reifier<'s> {
                 (kind, ty)
             }
         };
+
+        if !ty.is_subtype(superty) {
+            return Err(ReifyError {
+                kind: dbg!(ReifyErrorKind::InvalidType),
+                span: Some(expr.span),
+            });
+        }
 
         Ok(Expr {
             kind,
@@ -704,32 +661,47 @@ impl<'s> Reifier<'s> {
             }),
             parser::ExprKind::Apply(a, b) => {
                 let parser::ExprKind::Name(name) = &a.kind else {
-                    return Err(ReifyError { kind: ReifyErrorKind::InvalidType, span: Some(expr.span) })
+                    return Err(ReifyError {
+                        kind: dbg!(ReifyErrorKind::InvalidType),
+                        span: Some(expr.span),
+                    });
                 };
                 let Some(sym) = self.scoper.lookup(*name) else {
-                    return Err(ReifyError { kind: ReifyErrorKind::UndefinedSymbol(*name), span: Some(a.span) })
+                    return Err(ReifyError {
+                        kind: ReifyErrorKind::UndefinedSymbol(*name),
+                        span: Some(a.span),
+                    });
                 };
 
                 let arg_type = self.type_(b)?;
-                let Some(typedef) = self.module.typedefs.get(&sym) else {
-                    return Err(ReifyError { kind: ReifyErrorKind::InvalidType, span: Some(expr.span) })
+                let Some(def) = self.module.defs.get(&sym) else {
+                    return Err(ReifyError {
+                        kind: dbg!(ReifyErrorKind::InvalidType),
+                        span: Some(expr.span),
+                    });
+                };
+                let Expr { kind: ExprKind::Load(_), ty: Type::Function(Some(a_param), _), .. } = &def.body else {
+                    return Err(ReifyError {
+                        kind: dbg!(ReifyErrorKind::InvalidType),
+                        span: Some(expr.span),
+                    });
                 };
 
-                if !arg_type.is_subtype(&typedef.inner) {
+                if !arg_type.is_subtype(&a_param) {
                     return Err(ReifyError {
-                        kind: ReifyErrorKind::InvalidType,
+                        kind: dbg!(ReifyErrorKind::InvalidType),
                         span: Some(expr.span),
                     });
                 }
 
-                Type::Symbol(sym)
+                Type::Instance(sym)
             }
             parser::ExprKind::Name(name) => {
                 if let Some(symbol) = self.scoper.lookup(*name) {
                     if let Some(builtin) = self.builtin_types.get(&symbol) {
                         builtin.clone()
                     } else {
-                        Type::Symbol(symbol)
+                        Type::Instance(symbol)
                     }
                 } else {
                     return Err(ReifyError {
@@ -755,7 +727,7 @@ impl<'s> Reifier<'s> {
             }),
             _ => {
                 return Err(ReifyError {
-                    kind: ReifyErrorKind::InvalidType,
+                    kind: dbg!(ReifyErrorKind::InvalidType),
                     span: Some(expr.span),
                 })
             }
@@ -764,66 +736,83 @@ impl<'s> Reifier<'s> {
         Ok(kind)
     }
 
+    fn x() {
+        let _: (i32, _) = {
+            let x = unsafe { std::mem::transmute::<u32, _>(0) };
+            let y = x;
+            let z = y;
+            (x, z)
+        };
+        println!("Hello, world!");
+    }
+
     fn pattern(
         &mut self,
         expr: &parser::Expr<'s>,
-        ty: Option<&Type<'s>>,
+        superty: &Type<'s>,
     ) -> Result<'s, Pattern<'s>> {
         let (kind, ty) = match &expr.kind {
             parser::ExprKind::Apply(a, b) => {
-                let a_ty = if let Some(ty) = ty {
-                    let Type::Symbol(sym) = ty else {
+                let a_ty = if !superty.is_unknown() {
+                    let Type::Instance(sym) = superty else {
                         return Err(ReifyError {
-                            kind: ReifyErrorKind::InvalidType,
+                            kind: dbg!(ReifyErrorKind::InvalidType),
                             span: Some(a.span),
                         });
                     };
 
-                    Some(Type::Constructor(*sym))
+                    let constructor = self.module.defs.get(&sym).unwrap();
+
+                    constructor.body.ty.clone()
                 } else {
-                    None
+                    Type::Unknown
                 };
 
-                let a = self.pattern(a, a_ty.as_ref())?;
-                let Type::Constructor(sym) = a.ty else {
+                let a = self.pattern(&a, &a_ty)?;
+                let Type::Function(Some(param), ret) = &a.ty else {
                     return Err(ReifyError {
-                        kind: ReifyErrorKind::InvalidType,
+                        kind: dbg!(ReifyErrorKind::InvalidType),
                         span: Some(a.span),
                     });
                 };
-
-                let typedef = self.module.typedefs.get(&sym).unwrap();
-                let b = self.pattern(b, Some(&typedef.inner.clone()))?;
+                let &Type::Instance(sym) = &**ret else {
+                    return Err(ReifyError {
+                        kind: dbg!(ReifyErrorKind::InvalidType),
+                        span: Some(a.span),
+                    });
+                };
+                let b = self.pattern(&b, &param)?;
 
                 (
                     PatternKind::Apply(Box::new(a), Box::new(b)),
-                    Type::Symbol(sym),
+                    Type::Instance(sym),
                 )
             }
             parser::ExprKind::Variant(items) => match &**items {
                 [item] => {
-                    let value_ty = if let Some(ty) = ty {
-                        let Type::Variant(items) = ty else {
+                    let value_ty = if !superty.is_unknown() {
+                        let Type::Variant(items) = superty else {
                             return Err(ReifyError {
-                                kind: ReifyErrorKind::InvalidType,
+                                kind: dbg!(ReifyErrorKind::InvalidType),
                                 span: Some(expr.span),
                             });
                         };
 
-                        let Some(variant) = items.iter().filter(|it| it.name == item.name).next() else {
+                        let Some(variant) = items.iter().filter(|it| it.name == item.name).next()
+                        else {
                             return Err(ReifyError {
-                                kind: ReifyErrorKind::InvalidType,
+                                kind: dbg!(ReifyErrorKind::InvalidType),
                                 span: Some(expr.span),
                             });
                         };
 
-                        variant.inner.clone()
+                        variant.inner.as_ref().unwrap_or(&Type::Unknown).clone()
                     } else {
-                        None
+                        Type::Unknown
                     };
 
                     if let Some(value) = &item.value {
-                        let value = self.pattern(&value, value_ty.as_ref())?;
+                        let value = self.pattern(&value, &value_ty)?;
                         let inner_ty = Some(value.ty.clone());
 
                         (
@@ -851,35 +840,35 @@ impl<'s> Reifier<'s> {
                 }
             },
             parser::ExprKind::Tuple { items } => {
-                if let Some(ty) = ty {
-                    let Type::Tuple(ty_items) = ty else {
+                if !superty.is_unknown() {
+                    let Type::Tuple(ty_items) = superty else {
                         return Err(ReifyError {
-                            kind: ReifyErrorKind::InvalidType,
+                            kind: dbg!(ReifyErrorKind::InvalidType),
                             span: Some(expr.span),
                         });
                     };
 
                     if items.len() != ty_items.len() {
                         return Err(ReifyError {
-                            kind: ReifyErrorKind::InvalidType,
+                            kind: dbg!(ReifyErrorKind::InvalidType),
                             span: Some(expr.span),
                         });
                     }
 
                     let mut reified_items = Vec::with_capacity(items.len());
                     for (it, ty_it) in items.iter().zip(ty_items.iter()) {
-                        reified_items.push(self.pattern(it, Some(ty_it))?);
+                        reified_items.push(self.pattern(it, ty_it)?);
                     }
 
                     (
                         PatternKind::Tuple(reified_items.into_boxed_slice()),
-                        ty.clone(),
+                        superty.clone(),
                     )
                 } else {
                     let mut reified_items = Vec::with_capacity(items.len());
                     let mut ty_its = Vec::with_capacity(items.len());
                     for item in &**items {
-                        let item = self.pattern(&item, None)?;
+                        let item = self.pattern(&item, &Type::Unknown)?;
                         ty_its.push(item.ty.clone());
                         reified_items.push(item);
                     }
@@ -892,14 +881,14 @@ impl<'s> Reifier<'s> {
             }
             parser::ExprKind::Assert { expr, ty } => {
                 let ty = self.type_(ty)?;
-                let pat = self.pattern(expr, Some(&ty))?;
+                let pat = self.pattern(expr, &ty)?;
 
                 (pat.kind, pat.ty)
             }
             &parser::ExprKind::Solve(marker @ (SolveMarker::Val | SolveMarker::Var), name) => {
-                let Some(ty) = ty else {
+                if superty.is_unknown() {
                     return Err(ReifyError {
-                        kind: ReifyErrorKind::InvalidType,
+                        kind: dbg!(ReifyErrorKind::InvalidType),
                         span: Some(expr.span),
                     });
                 };
@@ -912,11 +901,11 @@ impl<'s> Reifier<'s> {
                         decl_span: expr.span,
                         name,
                         mutable: marker == SolveMarker::Var,
-                        ty: ty.clone(),
+                        ty: superty.clone(),
                     },
                 );
 
-                (PatternKind::Solve(marker, sym), ty.clone())
+                (PatternKind::Solve(marker, sym), superty.clone())
             }
             &parser::ExprKind::Solve(SolveMarker::Set, name) => {
                 let Some(sym) = self.scoper.lookup(name) else {
@@ -950,14 +939,10 @@ impl<'s> Reifier<'s> {
                     });
                 };
 
-                if self.module.typedefs.get(&sym).is_none() {
-                    return Err(ReifyError {
-                        kind: ReifyErrorKind::InvalidPattern,
-                        span: Some(expr.span),
-                    });
-                }
-
-                (PatternKind::Symbol(sym), Type::Constructor(sym))
+                (
+                    PatternKind::Symbol(sym),
+                    self.module.defs.get(&sym).unwrap().body.ty.clone(),
+                )
             }
             _ => {
                 return Err(ReifyError {

@@ -3,6 +3,7 @@ use crate::{tokenizer::{Span}, string_storage::Intern};
 #[derive(Debug)]
 pub struct Scope<'s> {
     pub defs: Box<[Def<'s>]>,
+    pub typedefs: Box<[Def<'s>]>,
     pub exprs: Box<[Expr<'s>]>,
     pub discard: bool,
 }
@@ -27,7 +28,7 @@ pub enum ExprKind<'s> {
         spec: bool,
         arg: Option<Box<Expr<'s>>>,
         body: Box<Expr<'s>>,
-        ty: Option<Box<Expr<'s>>>,
+        ret: Option<Box<Expr<'s>>>,
     },
     For {
         init: Option<Box<Expr<'s>>>,

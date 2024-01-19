@@ -1,8 +1,8 @@
-use std::{hash::Hash, io};
+use std::io;
 
 use crate::{
     char_reader::{CharReader, CharReaderSaver},
-    string_storage::{StringStorage, StringInterner, Intern},
+    string_storage::{StringInterner, Intern},
 };
 
 #[derive(Debug)]

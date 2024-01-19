@@ -10,9 +10,8 @@ pub use crate::parser::{BinOp, Literal, SolveMarker, UnOp};
 pub struct Module<'s> {
     pub main: Option<Symbol>,
     pub defs: FxHashMap<Symbol, Def<'s>>,
-    pub typedefs: FxHashMap<Symbol, TypeDef<'s>>,
     pub locals: FxHashMap<Symbol, Local<'s>>,
-    pub builtin_funcs: FxHashMap<Symbol, (Builtin, Option<Type<'s>>, Type<'s>)>,
+    pub builtins: FxHashMap<Symbol, (Builtin, Type<'s>)>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -43,6 +42,17 @@ impl<'s> Type<'s> {
 
     pub fn is_bool(&self) -> bool {
         self.is_subtype(&(Type::Primitive(PrimitiveType::Boolean)))
+    }
+
+    pub fn is_unit(&self) -> bool {
+        self.is_subtype(&Type::Tuple(Box::new([])))
+    }
+
+    pub fn is_unknown(&self) -> bool {
+        match self {
+            Type::Unknown => true,
+            _ => false,
+        }
     }
 }
 
@@ -103,6 +113,7 @@ impl<'s> Type<'s> {
                 }
             }
             (Type::Variant(a), Type::Variant(b)) => {
+                // self is a subtype of other if it only contains variants that are subtypes of variants in other
                 for a in a.iter() {
                     let mut found = false;
                     for b in b.iter() {
@@ -135,9 +146,9 @@ impl<'s> Type<'s> {
 
                 true
             }
-            (Type::Constructor(a), Type::Constructor(b)) => a == b,
-            (Type::Symbol(a), Type::Symbol(b)) => a == b,
+            (Type::Instance(a), Type::Instance(b)) => a == b,
             (Type::Primitive(a), Type::Primitive(b)) => a == b,
+            (_, Type::Unknown) => true,
             _ => false,
         }
     }
@@ -148,9 +159,9 @@ pub enum Type<'s> {
     Function(Option<Box<Type<'s>>>, Box<Type<'s>>),
     Variant(Box<[VariantItemType<'s>]>),
     Tuple(Box<[Type<'s>]>),
-    Constructor(Symbol),
-    Symbol(Symbol),
+    Instance(Symbol),
     Primitive(PrimitiveType),
+    Unknown,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -179,10 +190,7 @@ pub struct Local<'s> {
 pub struct Def<'s> {
     pub decl_span: Span,
     pub name: Intern<'s>,
-    pub spec: bool,
-    pub arg: Option<Pattern<'s>>,
     pub body: Expr<'s>,
-    pub ty: Type<'s>,
 }
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
@@ -230,10 +238,10 @@ pub enum ExprKind<'s> {
     StructuralEq(Box<Pattern<'s>>, Box<Expr<'s>>),
     Binary(BinOp, Box<Expr<'s>>, Box<Expr<'s>>),
     Unary(UnOp, Box<Expr<'s>>),
-    Call(Box<Expr<'s>>, Box<Expr<'s>>),
-    Construct(Symbol, Box<Expr<'s>>),
+    Apply(Box<Expr<'s>>, Box<Expr<'s>>),
     Variant(Intern<'s>, Option<Box<Expr<'s>>>),
-    Symbol(Symbol),
+    Constructor(Symbol),
+    Load(Symbol),
     Literal(Literal<'s>),
 }
 

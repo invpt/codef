@@ -5,7 +5,7 @@ type Expr
     \Neg(Expr)
     \Val(Int)
     \Arg;
-def parse(val src :: String) -> Expr => Expr\Add(Expr\Val 1, Expr\Val 1); // not exactly a parser ;)
+def parse(val src :: String) => Expr\Add(Expr\Val 1, Expr\Val 1); // not exactly a parser; not enough string methods to write one
 def eval(val expr :: Expr, val arg :: Int) -> Int {
     case expr = Expr\Add(val a, val b) {
         eval(a, arg) + eval(b, arg)
@@ -21,7 +21,7 @@ def eval(val expr :: Expr, val arg :: Int) -> Int {
 }
 
 // The dollar sign means "do the specialization with these arguments when the function is called"
-def compile(val expr :: Expr) -> (Int => Int) $=> (val arg :: Int) => eval(expr, arg);
+def compile(val expr :: Expr) $=> (val arg :: Int) => eval(expr, arg);
 
 def main() {
     val src = input();

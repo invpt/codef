@@ -56,6 +56,7 @@ impl<'i, 's, R: CharReader> Parser<'i, 's, R> {
         let mut start = 0;
         let mut end = 0;
         let mut defs = Vec::new();
+        let mut types = Vec::new();
         let mut exprs = Vec::with_capacity(1);
         let mut first = true;
         let mut discard = false;
@@ -70,7 +71,7 @@ impl<'i, 's, R: CharReader> Parser<'i, 's, R> {
             } else if self.has_peek(bpred!(TokenKind::Type))? {
                 let def = self.typedef()?;
                 let span = def.decl_span;
-                defs.push(def);
+                types.push(def);
                 discard = true;
                 span
             } else if self.has_peek(bpred!(TokenKind::Case))? {
@@ -122,6 +123,7 @@ impl<'i, 's, R: CharReader> Parser<'i, 's, R> {
                 span: Span { start, end },
                 kind: ExprKind::Scope(Scope {
                     defs: defs.into_boxed_slice(),
+                    typedefs: types.into_boxed_slice(),
                     exprs: exprs.into_boxed_slice(),
                     discard,
                 }),
@@ -163,7 +165,7 @@ impl<'i, 's, R: CharReader> Parser<'i, 's, R> {
         if self.has_peek(bpred!(
             TokenKind::Dollar | TokenKind::ThinArrow | TokenKind::FatArrow | TokenKind::OpenBrace
         ))? {
-            let ty = if self.eat(bpred!(TokenKind::ThinArrow))?.is_some() {
+            let ret = if self.eat(bpred!(TokenKind::ThinArrow))?.is_some() {
                 Some(self.logical()?)
             } else {
                 None
@@ -179,7 +181,7 @@ impl<'i, 's, R: CharReader> Parser<'i, 's, R> {
                 kind: ExprKind::Abstract {
                     arg: None,
                     spec,
-                    ty: ty.map(Box::new),
+                    ret: ret.map(Box::new),
                     body: Box::new(body),
                 },
             })
@@ -192,7 +194,7 @@ impl<'i, 's, R: CharReader> Parser<'i, 's, R> {
                     | TokenKind::FatArrow
                     | TokenKind::OpenBrace
             ))? {
-                let ty = if self.eat(bpred!(TokenKind::ThinArrow))?.is_some() {
+                let ret = if self.eat(bpred!(TokenKind::ThinArrow))?.is_some() {
                     Some(self.logical()?)
                 } else {
                     None
@@ -208,7 +210,7 @@ impl<'i, 's, R: CharReader> Parser<'i, 's, R> {
                     kind: ExprKind::Abstract {
                         arg: Some(Box::new(logical)),
                         spec,
-                        ty: ty.map(Box::new),
+                        ret: ret.map(Box::new),
                         body: Box::new(body),
                     },
                 })
@@ -396,7 +398,7 @@ impl<'i, 's, R: CharReader> Parser<'i, 's, R> {
                 kind: ExprKind::Abstract {
                     arg: Some(Box::new(logical)),
                     spec,
-                    ty: ty.map(Box::new),
+                    ret: ty.map(Box::new),
                     body: Box::new(body),
                 },
             })

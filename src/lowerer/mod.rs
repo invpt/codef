@@ -1,16 +1,27 @@
 use crate::reifier::{self, Builtin, VariantItemType};
 
-use rustc_hash::{FxHashMap, FxHashSet};
+use rustc_hash::FxHashMap;
 
 mod lir;
 pub use lir::*;
 
 pub fn lower<'s>(module: &reifier::Module<'s>) -> Module<'s> {
+    let mut defs = FxHashMap::default();
+
     for (sym, def) in &module.defs {
-        dbg!(LinearTacLowerer::new(module).lower(def.spec, def.arg.as_ref(), &def.body));
+        let reifier::ExprKind::Abstract { spec, arg, body } = &def.body.kind else {
+            continue;
+        };
+        defs.insert(
+            *sym,
+            Def {
+                name: def.name,
+                value: Value::Function(Lowerer::new(module).lower(*spec, arg.as_ref(), &body)),
+            },
+        );
     }
 
-    todo!()
+    Module { main: None, defs }
 }
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
@@ -20,7 +31,7 @@ struct LabelRef(usize);
 struct VarRef(usize);
 
 #[derive(Debug)]
-struct LinearTacLowerer<'a> {
+struct Lowerer<'a> {
     // the module we're lowering
     reified_module: &'a reifier::Module<'a>,
 
@@ -43,31 +54,31 @@ struct LinearTacLowerer<'a> {
 
     // the cfg, as built so far
     labels: Vec<Option<BlockRef>>,
-    blocks: Vec<(
-        Vec<Insn>,                // Instructions
-        Option<Branch<LabelRef>>, // Branch
-        Ctrl<LabelRef>,           // Control
-        Vec<(VarRef, Temp)>,      // parameters
-        Vec<Temp>,                // generations after completion
-    )>,
+    blocks: Vec<Block<LabelRef>>,
+    block_meta: Vec<BlockMeta>,
 
     // the block we're currently working on
-    current_insns: Vec<Insn>,
-    current_branch: Option<Branch<LabelRef>>,
-    current_ctrl: Option<Ctrl<LabelRef>>,
-    current_live: FxHashMap<VarRef, Temp>,
+    insns: Vec<Insn>,
+    branch: Option<Branch<LabelRef>>,
+    live: FxHashMap<VarRef, Temp>,
 }
 
-impl<'a> LinearTacLowerer<'a> {
-    fn new(reified_module: &'a reifier::Module<'a>) -> LinearTacLowerer<'a> {
-        LinearTacLowerer {
+#[derive(Debug)]
+struct BlockMeta {
+    param_vars: Vec<VarRef>,
+    generations: Vec<Temp>,
+}
+
+impl<'a> Lowerer<'a> {
+    fn new(reified_module: &'a reifier::Module<'a>) -> Lowerer<'a> {
+        Lowerer {
             args: Vec::new(),
             labels: Vec::new(),
             blocks: Vec::new(),
-            current_insns: Vec::new(),
-            current_branch: None,
-            current_ctrl: None,
-            current_live: FxHashMap::default(),
+            block_meta: Vec::new(),
+            insns: Vec::new(),
+            branch: None,
+            live: FxHashMap::default(),
             vals: FxHashMap::default(),
             vars: FxHashMap::default(),
             generations: Vec::new(),
@@ -134,57 +145,59 @@ impl<'a> LinearTacLowerer<'a> {
             self.ctrl(Ctrl::Return(spec_res_temp))
         }
 
-        let param_vars = self
-            .blocks
-            .iter()
-            .map(|(_, _, _, params, _)| params.iter().map(|(v, _)| v.clone()).collect::<Vec<_>>())
-            .collect::<Vec<_>>();
         let mut blocks = Vec::new();
-        for (insns, branch, ctrl, params, generations) in self.blocks {
+        for (
+            i,
+            Block {
+                insns,
+                branch,
+                ctrl,
+                params,
+            },
+        ) in std::mem::take(&mut self.blocks).into_iter().enumerate()
+        {
             blocks.push(Block {
-                params: params.iter().map(|(_, t)| *t).collect::<Vec<_>>().into_boxed_slice(),
-                insns: insns.into_boxed_slice(),
+                params,
+                insns,
                 branch: if let Some(Branch(cmp, a, b, t)) = branch {
                     Some(Branch(
                         cmp,
                         a,
                         b,
-                        Self::conv_target(self.labels[t.0].unwrap(), &param_vars, &generations),
+                        self.conv_target(BlockRef(i), self.labels[t.0].unwrap()),
                     ))
                 } else {
                     None
                 },
                 ctrl: match ctrl {
-                    Ctrl::Jump(t) => Ctrl::Jump(Self::conv_target(
-                        self.labels[t.0].unwrap(),
-                        &param_vars,
-                        &generations,
-                    )),
+                    Ctrl::Jump(t) => {
+                        Ctrl::Jump(self.conv_target(BlockRef(i), self.labels[t.0].unwrap()))
+                    }
                     Ctrl::Return(r) => Ctrl::Return(r),
                 },
             })
         }
 
         Cfg {
+            temps: self.temp_counter,
             params: self.args.into_boxed_slice(),
             blocks: blocks.into_boxed_slice(),
+            entry: BlockRef(0),
         }
     }
 
-    fn conv_target(
-        block_ref: BlockRef,
-        param_vars: &[Vec<VarRef>],
-        generations: &[Temp],
-    ) -> Target {
+    fn conv_target(&self, source: BlockRef, target: BlockRef) -> Target {
+        let source_meta = &self.block_meta[source.0];
+        let target_meta = &self.block_meta[target.0];
+
         // we give all of the reqired params by taking the current value of each variable
-        let params = &param_vars[block_ref.0];
-        let mut args = Vec::with_capacity(params.len());
-        for var in params {
-            args.push(generations[var.0])
+        let mut args = Vec::with_capacity(target_meta.param_vars.len());
+        for var in &*target_meta.param_vars {
+            args.push(source_meta.generations[var.0])
         }
 
         Target {
-            block: block_ref,
+            block: target,
             arguments: args.into_boxed_slice(),
         }
     }
@@ -207,7 +220,7 @@ impl<'a> LinearTacLowerer<'a> {
                     None
                 }
             }
-            reifier::ExprKind::Abstract { .. } => todo!("general closures not currently supported"),
+            reifier::ExprKind::Abstract { .. } => todo!("general closures"),
             reifier::ExprKind::For {
                 init,
                 cond,
@@ -382,7 +395,7 @@ impl<'a> LinearTacLowerer<'a> {
                     reifier::BinOp::Add
                     | reifier::BinOp::Sub
                     | reifier::BinOp::Mul
-                    | reifier::BinOp::Div => panic!("Unexpected type for Add/Sub/Mul/Div"),
+                    | reifier::BinOp::Div => unreachable!(),
                     reifier::BinOp::Or | reifier::BinOp::And => unreachable!(),
                     reifier::BinOp::Eq if a_ty.is_int() => (BinOp::EqI, false),
                     reifier::BinOp::Neq if a_ty.is_int() => (BinOp::NeqI, false),
@@ -401,7 +414,7 @@ impl<'a> LinearTacLowerer<'a> {
                     | reifier::BinOp::Lt
                     | reifier::BinOp::Leq
                     | reifier::BinOp::Gt
-                    | reifier::BinOp::Geq => panic!("Unexpected type for comparison"),
+                    | reifier::BinOp::Geq => unreachable!(),
                     reifier::BinOp::Recv => todo!(),
                     reifier::BinOp::BitOr => (BinOp::BitOrI, false),
                     reifier::BinOp::BitXor => (BinOp::BitXorI, false),
@@ -418,9 +431,17 @@ impl<'a> LinearTacLowerer<'a> {
                 }
             }
             reifier::ExprKind::Unary(reifier::UnOp::Neg, a) if want_output => {
-                let a = self.expr(a, true).unwrap();
-                let out = self.load(Producer::Unary(UnOp::NegI, a));
-                Some(out)
+                if a.ty.is_int() {
+                    let a = self.expr(a, true).unwrap();
+                    let out = self.load(Producer::Unary(UnOp::NegI, a));
+                    Some(out)
+                } else if a.ty.is_float() {
+                    let a = self.expr(a, true).unwrap();
+                    let out = self.load(Producer::Unary(UnOp::NegF, a));
+                    Some(out)
+                } else {
+                    unreachable!()
+                }
             }
             reifier::ExprKind::Unary(reifier::UnOp::Not, a) if want_output => {
                 let a = self.expr(a, true).unwrap();
@@ -428,37 +449,40 @@ impl<'a> LinearTacLowerer<'a> {
                 Some(out)
             }
             reifier::ExprKind::Unary(_, a) => self.expr(a, false),
-            reifier::ExprKind::Call(base, arg) => {
-                let base = self.expr(base, true).unwrap();
-                let args = if let reifier::Type::Tuple(items) = &arg.ty {
-                    if items.len() > 0 {
-                        let arg = self.expr(arg, true).unwrap();
-                        let mut args = Vec::with_capacity(items.len());
-                        for i in 0..items.len() {
-                            let temp = self.load(Producer::Memory(
-                                Kind::of(&items[i]),
-                                MemRef(arg, i as u64 * 8),
-                            ));
-                            args.push(temp);
+            reifier::ExprKind::Apply(base, arg) => {
+                if let reifier::ExprKind::Constructor(_) = &base.kind {
+                    self.expr(&arg, want_output)
+                } else {
+                    let base = self.expr(base, true).unwrap();
+                    let args = if let reifier::Type::Tuple(items) = &arg.ty {
+                        if items.len() > 0 {
+                            let arg = self.expr(arg, true).unwrap();
+                            let mut args = Vec::with_capacity(items.len());
+                            for i in 0..items.len() {
+                                let temp = self.load(Producer::Memory(
+                                    Kind::of(&items[i]),
+                                    MemRef(arg, i as u64 * 8),
+                                ));
+                                args.push(temp);
+                            }
+
+                            args.into_boxed_slice()
+                        } else {
+                            Box::new([])
                         }
-
-                        args.into_boxed_slice()
                     } else {
-                        Box::new([])
+                        Box::new([self.expr(arg, true).unwrap()])
+                    };
+
+                    let out = self.load(Producer::Call(base, args, Kind::of(&arg.ty)));
+
+                    if want_output {
+                        Some(out)
+                    } else {
+                        None
                     }
-                } else {
-                    Box::new([self.expr(arg, true).unwrap()])
-                };
-
-                let out = self.load(Producer::Call(base, args, Kind::of(&arg.ty)));
-
-                if want_output {
-                    Some(out)
-                } else {
-                    None
                 }
             }
-            reifier::ExprKind::Construct(_sym, data) => self.expr(data, want_output),
             reifier::ExprKind::Variant(name, data) => {
                 if want_output {
                     let item_ty = VariantItemType {
@@ -485,8 +509,10 @@ impl<'a> LinearTacLowerer<'a> {
                     }
                 }
             }
-            reifier::ExprKind::Symbol(_) if !want_output => None,
-            reifier::ExprKind::Symbol(sym) => Some(self.symbol(sym)),
+            reifier::ExprKind::Load(_) | reifier::ExprKind::Constructor(_) if !want_output => None,
+            reifier::ExprKind::Load(sym) | reifier::ExprKind::Constructor(sym) => {
+                Some(self.symbol(sym))
+            }
             reifier::ExprKind::Literal(_) if !want_output => None,
             reifier::ExprKind::Literal(lit) => Some(match lit {
                 &reifier::Literal::Boolean(b) => self.load(Producer::ConstI(b as u64)),
@@ -494,20 +520,6 @@ impl<'a> LinearTacLowerer<'a> {
                 &reifier::Literal::Float(f) => self.load(Producer::ConstF(f)),
                 _ => todo!(),
             }),
-        }
-    }
-
-    fn symbol(&mut self, sym: &reifier::Symbol) -> Temp {
-        if let Some(local_temp) = self.vals.get(sym) {
-            *local_temp
-        } else if let Some(var) = self.vars.get(sym) {
-            self.generations[var.0]
-        } else if let Some(def) = self.reified_module.defs.get(sym) {
-            self.load(Producer::Symbol(Kind::of(&def.ty), *sym))
-        } else if let Some(builtin) = self.reified_module.builtin_funcs.get(sym) {
-            self.load(Producer::Builtin(builtin.0))
-        } else {
-            panic!("symbol not found: {sym:?}")
         }
     }
 
@@ -646,7 +658,7 @@ impl<'a> LinearTacLowerer<'a> {
                     },
                 );
             }
-            reifier::ExprKind::Call(..) => {
+            reifier::ExprKind::Apply(..) => {
                 let res = self.expr(expr, true).unwrap();
                 let zero = self.load(Producer::ConstI(0));
                 let (cmp, lab) = match jump_cond {
@@ -655,7 +667,7 @@ impl<'a> LinearTacLowerer<'a> {
                 };
                 self.branch(Branch(cmp, res, zero, lab));
             }
-            reifier::ExprKind::Symbol(sym) => {
+            reifier::ExprKind::Load(sym) | reifier::ExprKind::Constructor(sym) => {
                 let zero = self.load(Producer::ConstI(0));
                 let temp = self.symbol(sym);
                 let (cmp, lab) = match jump_cond {
@@ -676,7 +688,6 @@ impl<'a> LinearTacLowerer<'a> {
                 }
             }
             reifier::ExprKind::Literal(..)
-            | reifier::ExprKind::Construct(..)
             | reifier::ExprKind::Variant(..)
             | reifier::ExprKind::Unary(reifier::UnOp::Neg, ..)
             | reifier::ExprKind::Binary(..)
@@ -760,6 +771,20 @@ impl<'a> LinearTacLowerer<'a> {
         }
     }
 
+    fn symbol(&mut self, sym: &reifier::Symbol) -> Temp {
+        if let Some(local_temp) = self.vals.get(sym) {
+            *local_temp
+        } else if let Some(var) = self.vars.get(sym) {
+            self.get_var(*var)
+        } else if let Some(def) = self.reified_module.defs.get(sym) {
+            self.load(Producer::Symbol(Kind::of(&def.body.ty), *sym))
+        } else if let Some(builtin) = self.reified_module.builtins.get(sym) {
+            self.load(Producer::Builtin(builtin.0))
+        } else {
+            panic!("symbol not found: {sym:?}")
+        }
+    }
+
     fn alloc(&mut self, bytes: u64) -> Temp {
         let alloc = self.load(Producer::Builtin(Builtin::Alloc));
         let bytes = self.load(Producer::ConstI(bytes));
@@ -777,12 +802,12 @@ impl<'a> LinearTacLowerer<'a> {
     }
 
     fn get_var(&mut self, var: VarRef) -> Temp {
-        if self.current_live.contains_key(&var) {
+        if self.live.contains_key(&var) {
             self.generations[var.0]
         } else {
             let kind = self.generations[var.0].kind;
             let temp = self.new_temp(kind);
-            self.current_live.insert(var, temp);
+            self.live.insert(var, temp);
             self.generations[var.0] = temp;
             self.generations[var.0]
         }
@@ -801,12 +826,12 @@ impl<'a> LinearTacLowerer<'a> {
     }
 
     fn set_label_target(&mut self, label: LabelRef) {
-        self.finalize_block();
+        self.finalize_block(Ctrl::Jump(label));
         self.labels[label.0] = Some(BlockRef(self.blocks.len()));
     }
 
-    fn store(&mut self, dest: MemRef, src: Temp) {
-        self.insn(Insn::Store(dest, src));
+    fn store(&mut self, dest: MemRef, source: Temp) {
+        self.insn(Insn::Store(dest, source));
     }
 
     fn load(&mut self, producer: Producer) -> Temp {
@@ -816,52 +841,45 @@ impl<'a> LinearTacLowerer<'a> {
     }
 
     fn insn(&mut self, insn: Insn) {
-        if self.current_ctrl.is_some() || self.current_branch.is_some() {
-            self.finalize_block();
-        }
+        let lab = self.new_label();
+        self.set_label_target(lab);
 
-        self.current_insns.push(insn);
+        self.insns.push(insn);
     }
 
     fn ctrl(&mut self, ctrl: Ctrl<LabelRef>) {
-        assert!(matches!(self.current_ctrl, None));
-
-        self.current_ctrl = Some(ctrl);
-        self.finalize_block();
+        self.finalize_block(ctrl);
     }
 
     fn branch(&mut self, branch: Branch<LabelRef>) {
-        if self.current_branch.is_some() {
-            self.finalize_block();
-        }
+        let lab = self.new_label();
+        self.set_label_target(lab);
 
-        self.current_branch = Some(branch);
+        self.branch = Some(branch);
     }
 
-    fn finalize_block(&mut self) {
-        let current_insns = std::mem::take(&mut self.current_insns);
-        let current_branch = self.current_branch.take();
-        let current_ctrl = if let Some(current_ctrl) = self.current_ctrl.take() {
-            current_ctrl
-        } else {
-            let next_label = self.new_label();
-            self.labels[next_label.0] = Some(BlockRef(self.blocks.len() + 1));
-            Ctrl::Jump(next_label)
-        };
-        let current_live = std::mem::take(&mut self.current_live);
+    fn finalize_block(&mut self, ctrl: Ctrl<LabelRef>) {
+        let current_insns = std::mem::take(&mut self.insns);
+        let current_branch = self.branch.take();
+        let current_live = std::mem::take(&mut self.live);
+        let mut param_vars = Vec::with_capacity(current_live.len());
         let mut params = Vec::with_capacity(current_live.len());
         for (var, temp) in current_live {
-            params.push((var, temp));
+            param_vars.push(var);
+            params.push(temp);
         }
-        let out_generations = self.generations.clone();
+        let generations = self.generations.clone();
 
-        self.blocks.push((
-            current_insns,
-            current_branch,
-            current_ctrl,
-            params,
-            out_generations,
-        ));
+        self.blocks.push(Block {
+            insns: current_insns.into_boxed_slice(),
+            branch: current_branch,
+            ctrl,
+            params: params.into_boxed_slice(),
+        });
+        self.block_meta.push(BlockMeta {
+            param_vars,
+            generations,
+        });
     }
 }
 
