@@ -2,7 +2,7 @@ use std::{hash::Hash, num::NonZeroUsize};
 
 use rustc_hash::FxHashMap;
 
-use crate::{string_storage::Intern, tokenizer::Span};
+use crate::{strings::Intern, tokenizer::Span};
 
 pub use crate::parser::{BinOp, Literal, SolveMarker, UnOp};
 

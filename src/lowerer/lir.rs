@@ -2,7 +2,7 @@ use rustc_hash::FxHashMap;
 
 use crate::{
     reifier::{Builtin, Symbol},
-    string_storage::Intern,
+    strings::Intern,
 };
 
 #[derive(Debug)]

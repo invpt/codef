@@ -9,7 +9,7 @@ use rustc_hash::FxHashMap;
 
 use crate::{
     parser,
-    string_storage::{Intern, StringInterner},
+    strings::{Intern, Strings},
     tokenizer::Span,
 };
 
@@ -37,11 +37,11 @@ pub enum ReifyErrorKind<'s> {
 type Result<'s, T> = std::result::Result<T, ReifyError<'s>>;
 
 pub fn reify<'s>(
-    interner: &'s mut StringInterner<'s>,
+    strings: &'s Strings,
     expr: &parser::Expr<'s>,
 ) -> Result<'s, Module<'s>> {
     Reifier {
-        interner,
+        strings,
         scoper: Scoper::default(),
         module: Module::default(),
         def_types: FxHashMap::default(),
@@ -51,7 +51,7 @@ pub fn reify<'s>(
 }
 
 struct Reifier<'s> {
-    interner: &'s mut StringInterner<'s>,
+    strings: &'s Strings,
     scoper: Scoper<'s>,
     module: Module<'s>,
     def_types: FxHashMap<Symbol, Type<'s>>,
@@ -127,13 +127,13 @@ impl<'s> Reifier<'s> {
     }
 
     fn builtin_type(&mut self, name: &str, kind: Type<'s>) {
-        let name = self.interner.intern(name.into());
+        let name = self.strings.intern(name.into());
         self.builtin_types
             .insert(self.scoper.new_symbol(name), kind);
     }
 
     fn builtin_def(&mut self, name: &str, which: Builtin, ty: Type<'s>) {
-        let name = self.interner.intern(name.into());
+        let name = self.strings.intern(name.into());
         self.module
             .builtins
             .insert(self.scoper.new_symbol(name), (which, ty));

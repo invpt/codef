@@ -1,4 +1,4 @@
-use crate::{tokenizer::{Span}, string_storage::Intern};
+use crate::{tokenizer::{Span}, strings::Intern};
 
 #[derive(Debug)]
 pub struct Scope<'s> {

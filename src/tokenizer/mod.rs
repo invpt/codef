@@ -2,7 +2,7 @@ use std::io;
 
 use crate::{
     char_reader::{CharReader, CharReaderSaver},
-    string_storage::{StringInterner, Intern},
+    strings::{Strings, Intern},
 };
 
 #[derive(Debug)]
@@ -29,9 +29,9 @@ impl From<io::Error> for TokenizationError {
 
 type Result<T> = std::result::Result<T, TokenizationError>;
 
-pub struct Tokens<'i, 's, R> {
+pub struct Tokens<'s, R> {
     chars: R,
-    pub(crate) strings: &'i mut StringInterner<'s>,
+    pub(crate) strings: &'s Strings,
     peek: Option<Token<'s>>,
 }
 
@@ -103,11 +103,11 @@ pub enum TokenKind<'s> {
     String(Intern<'s>),
 }
 
-impl<'i, 's, R: CharReader> Tokens<'i, 's, R> {
-    pub fn of(chars: R, interner: &'s mut StringInterner<'s>) -> Tokens<'i, 's, R> {
+impl<'i, 's, R: CharReader> Tokens<'s, R> {
+    pub fn of(chars: R, strings: &'s Strings) -> Tokens<'s, R> {
         Tokens {
             chars,
-            strings: interner,
+            strings,
             peek: None,
         }
     }
@@ -316,7 +316,7 @@ impl<'i, 's, R: CharReader> Tokens<'i, 's, R> {
         };
 
         Ok(Some(Token {
-            kind: TokenKind::String(self.strings.intern(string)),
+            kind: TokenKind::String(self.strings.intern(string.into_boxed_str())),
             span: Span {
                 start,
                 end: inner_end + end_ch.len_utf8(),
@@ -366,7 +366,7 @@ impl<'i, 's, R: CharReader> Tokens<'i, 's, R> {
                 "else" => TokenKind::Else,
                 "for" => TokenKind::For,
                 "in" => TokenKind::In,
-                _ => TokenKind::Name(self.strings.intern(name)),
+                _ => TokenKind::Name(self.strings.intern(name.into_boxed_str())),
             },
             span: Span { start, end },
         }))

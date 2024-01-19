@@ -1,7 +1,7 @@
 use crate::{
     char_reader::CharReader,
     errors::ErrorStream,
-    tokenizer::{Span, Token, TokenKind, TokenizationError, Tokens}, string_storage::StringInterner,
+    tokenizer::{Span, Token, TokenKind, TokenizationError, Tokens}, strings::Strings,
 };
 
 mod ast;
@@ -33,21 +33,21 @@ impl<'s> From<TokenizationError> for ParseError<'s> {
 
 type Result<'s, T> = std::result::Result<T, ParseError<'s>>;
 
-pub fn parse<'i, 's>(
-    tokens: Tokens<'i, 's, impl CharReader>,
+pub fn parse<'s>(
+    tokens: Tokens<'s, impl CharReader>,
     errors: &'s ErrorStream<'s>,
-) -> Result<'s, (&'i mut StringInterner<'s>, Expr<'s>)> {
+) -> Result<'s, (&'s Strings, Expr<'s>)> {
     let mut parser = Parser { tokens, errors };
     let res = parser.parse()?;
     Ok((parser.tokens.strings, res))    
 }
 
-struct Parser<'i, 's, R> {
-    tokens: Tokens<'i, 's, R>,
+struct Parser<'s, R> {
+    tokens: Tokens<'s, R>,
     errors: &'s ErrorStream<'s>,
 }
 
-impl<'i, 's, R: CharReader> Parser<'i, 's, R> {
+impl<'i, 's, R: CharReader> Parser<'s, R> {
     fn parse(&mut self) -> Result<'s, Expr<'s>> {
         self.scope(bpred!())
     }
